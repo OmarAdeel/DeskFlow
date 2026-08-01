@@ -1,0 +1,12 @@
+find src/components/views -type f -name "*.tsx" -exec sed -i 's/voktech_conversations/demo_conversations/g' {} +
+find src/components/views -type f -name "*.tsx" -exec sed -i 's/canvas_cards/demo_canvas_cards/g' {} +
+find src/components/views -type f -name "*.tsx" -exec sed -i 's/voktech_employee_notes/demo_employee_notes/g' {} +
+find src/components/views -type f -name "*.tsx" -exec sed -i 's/voktech_management_tasks/demo_management_tasks/g' {} +
+find src/components/views -type f -name "*.tsx" -exec sed -i 's/voktech_organizations_config/demo_organizations_config/g' {} +
+find src/components/views -type f -name "*.tsx" -exec sed -i 's/followup_tasks/demo_followup_tasks/g' {} +
+find src/components/views -type f -name "*.tsx" -exec sed -i 's/crm_deals/demo_crm_deals/g' {} +
+find src/components/views -type f -name "*.tsx" -exec sed -i 's/crm_leads/demo_crm_leads/g' {} +
+find src/components/views -type f -name "*.tsx" -exec sed -i 's/crm_clients/demo_crm_clients/g' {} +
+find src/components/views -type f -name "*.tsx" -exec sed -i 's/gdrive_folders/demo_gdrive_folders/g' {} +
+find src/components/views -type f -name "*.tsx" -exec sed -i 's/gdrive_files/demo_gdrive_files/g' {} +
+find src/components/views -type f -name "*.tsx" -exec sed -i 's/unfiled_gmail_emails/demo_gmail_emails/g' {} +

@@ -1,0 +1,6 @@
+{
+  "name": "Wotech Workspace",
+  "description": "Unified Enterprise Workspace Platform integrating real-time team channels, omnichannel social DMs, task engine, multi-account email hub, CRM pipelines, canvas, and super admin governance.",
+  "requestFramePermissions": ["camera", "microphone", "display-capture"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

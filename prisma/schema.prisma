@@ -1,0 +1,203 @@
+// Prisma Schema for Unified Workspace Platform
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  STANDARD_USER
+  GUEST
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  COMPLETED
+  BLOCKED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum DealStage {
+  LEAD
+  CONTACTED
+  PROPOSAL
+  WON
+  LOST
+}
+
+model User {
+  id             String          @id @default(uuid())
+  name           String
+  email          String          @unique
+  role           Role            @default(STANDARD_USER)
+  title          String?
+  phone          String?
+  avatar         String?
+  status         String          @default("active")
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  messages       Message[]
+  tasksAssigned  Task[]          @relation("AssigneeTasks")
+  tasksCreated   Task[]          @relation("CreatorTasks")
+  deals          Deal[]
+  socialAccounts SocialAccount[]
+  mailAccounts   MailAccount[]
+  canvases       Canvas[]
+  auditLogs      AuditLog[]
+}
+
+model Channel {
+  id          String    @id @default(uuid())
+  name        String
+  description String?
+  isPrivate   Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  messages    Message[]
+  canvases    Canvas[]
+}
+
+model Message {
+  id              String     @id @default(uuid())
+  channelId       String
+  senderId        String
+  content         String
+  parentMessageId String?
+  attachments     Json?
+  isPinned        Boolean    @default(false)
+  createdAt       DateTime   @default(now())
+
+  channel         Channel    @relation(fields: [channelId], references: [id])
+  sender          User       @relation(fields: [senderId], references: [id])
+  parentMessage   Message?   @relation("MessageThread", fields: [parentMessageId], references: [id])
+  replies         Message[]  @relation("MessageThread")
+  tasks           Task[]
+}
+
+model Task {
+  id              String     @id @default(uuid())
+  title           String
+  description     String?
+  status          TaskStatus @default(TODO)
+  priority        Priority   @default(MEDIUM)
+  creatorId       String
+  assigneeId      String?
+  dueDate         DateTime?
+  sourceMessageId String?
+  createdAt       DateTime   @default(now())
+
+  creator         User       @relation("CreatorTasks", fields: [creatorId], references: [id])
+  assignee        User?      @relation("AssigneeTasks", fields: [assigneeId], references: [id])
+  sourceMessage   Message?   @relation(fields: [sourceMessageId], references: [id])
+}
+
+model Contact {
+  id            String   @id @default(uuid())
+  name          String
+  email         String?
+  phone         String?
+  organization  String?
+  socialHandles Json?
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  deals         Deal[]
+}
+
+model Deal {
+  id         String    @id @default(uuid())
+  title      String
+  contactId  String
+  value      Float     @default(0.0)
+  currency   String    @default("USD")
+  stage      DealStage @default(LEAD)
+  assignedTo String?
+  createdAt  DateTime  @default(now())
+
+  contact    Contact   @relation(fields: [contactId], references: [id])
+  user       User?     @relation(fields: [assignedTo], references: [id])
+}
+
+model SocialAccount {
+  id          String   @id @default(uuid())
+  userId      String
+  platform    String
+  accountName String
+  webhookUrl  String?
+  accessToken String?
+  status      String   @default("connected")
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id])
+}
+
+model MailAccount {
+  id           String   @id @default(uuid())
+  userId       String
+  emailAddress String
+  provider     String
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id])
+}
+
+model Canvas {
+  id        String   @id @default(uuid())
+  title     String
+  content   String
+  channelId String?
+  creatorId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  channel   Channel? @relation(fields: [channelId], references: [id])
+  creator   User     @relation(fields: [creatorId], references: [id])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  actorId   String?
+  action    String
+  details   String?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  actor     User?    @relation(fields: [actorId], references: [id])
+}
+
+model FileAsset {
+  id          String   @id @default(uuid())
+  filename    String
+  fileSize    Int
+  mimeType    String
+  fileUrl     String
+  uploaderId  String
+  sourceType  String   // 'channel', 'dm', 'task', 'email'
+  sourceId    String?
+  createdAt   DateTime @default(now())
+}
+
+model WebhookEndpoint {
+  id          String   @id @default(uuid())
+  name        String
+  url         String
+  eventTypes  Json
+  secretKey   String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}

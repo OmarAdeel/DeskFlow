@@ -1,0 +1,189 @@
+@import "tailwindcss";
+
+@layer utilities {
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: #374151;
+    border-radius: 20px;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: #4b5563;
+  }
+
+  .pattern-grid {
+    background-image: linear-gradient(to right, #2a2b32 1px, transparent 1px),
+      linear-gradient(to bottom, #2a2b32 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+}
+
+/* Dynamic Authentic Slack Theme Engine */
+
+/* 1. Aubergine (Classic Slack Signature Dark) */
+html[data-theme="Aubergine"] body,
+html[data-theme="Aubergine"] .bg-\[\#121317\] {
+  background-color: #3F0E40 !important;
+}
+html[data-theme="Aubergine"] .bg-\[\#1A1D21\],
+html[data-theme="Aubergine"] .bg-\[\#16181D\] {
+  background-color: #1F1A24 !important;
+}
+html[data-theme="Aubergine"] .bg-\[\#14161B\] {
+  background-color: #28212F !important;
+}
+html[data-theme="Aubergine"] .bg-\[\#2B4BCA\] {
+  background-color: #1164A3 !important;
+}
+html[data-theme="Aubergine"] .border-gray-800,
+html[data-theme="Aubergine"] .border-gray-800\/50,
+html[data-theme="Aubergine"] .border-\[\#2A2B32\]\/50 {
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* 2. Aubergine Light (Classic Slack Signature Light) */
+html[data-theme="Aubergine Light"] body {
+  background-color: #ffffff !important;
+  color: #1d1c1d !important;
+}
+html[data-theme="Aubergine Light"] .bg-\[\#121317\] {
+  background-color: #3F0E40 !important;
+}
+html[data-theme="Aubergine Light"] .bg-\[\#1A1D21\],
+html[data-theme="Aubergine Light"] .bg-\[\#16181D\] {
+  background-color: #ffffff !important;
+  color: #1d1c1d !important;
+}
+html[data-theme="Aubergine Light"] .bg-\[\#14161B\] {
+  background-color: #f8f9fa !important;
+  color: #1d1c1d !important;
+}
+html[data-theme="Aubergine Light"] .bg-\[\#2B4BCA\] {
+  background-color: #1164A3 !important;
+}
+html[data-theme="Aubergine Light"] .text-gray-200,
+html[data-theme="Aubergine Light"] .text-gray-300,
+html[data-theme="Aubergine Light"] .text-white {
+  color: #1d1c1d !important;
+}
+html[data-theme="Aubergine Light"] .bg-\[\#121317\] .text-gray-200,
+html[data-theme="Aubergine Light"] .bg-\[\#121317\] .text-gray-300,
+html[data-theme="Aubergine Light"] .bg-\[\#121317\] .text-white {
+  color: #ffffff !important;
+}
+html[data-theme="Aubergine Light"] .text-gray-400 {
+  color: #616061 !important;
+}
+html[data-theme="Aubergine Light"] .border-gray-800,
+html[data-theme="Aubergine Light"] .border-gray-800\/50,
+html[data-theme="Aubergine Light"] .border-\[\#2A2B32\]\/50 {
+  border-color: #e2e8f0 !important;
+}
+
+/* 3. Slack Clean Light */
+html[data-theme="Slack Clean Light"] body {
+  background-color: #ffffff !important;
+  color: #1d1c1d !important;
+}
+html[data-theme="Slack Clean Light"] .bg-\[\#121317\] {
+  background-color: #f8f8f8 !important;
+  border-color: #e2e8f0 !important;
+}
+html[data-theme="Slack Clean Light"] .bg-\[\#1A1D21\],
+html[data-theme="Slack Clean Light"] .bg-\[\#16181D\] {
+  background-color: #ffffff !important;
+  color: #1d1c1d !important;
+}
+html[data-theme="Slack Clean Light"] .bg-\[\#14161B\] {
+  background-color: #f1f5f9 !important;
+  color: #1d1c1d !important;
+}
+html[data-theme="Slack Clean Light"] .bg-\[\#2B4BCA\] {
+  background-color: #1164A3 !important;
+}
+html[data-theme="Slack Clean Light"] .text-gray-200,
+html[data-theme="Slack Clean Light"] .text-gray-300,
+html[data-theme="Slack Clean Light"] .text-white {
+  color: #1d1c1d !important;
+}
+html[data-theme="Slack Clean Light"] .text-gray-400 {
+  color: #616061 !important;
+}
+html[data-theme="Slack Clean Light"] .border-gray-800,
+html[data-theme="Slack Clean Light"] .border-gray-800\/50,
+html[data-theme="Slack Clean Light"] .border-\[\#2A2B32\]\/50 {
+  border-color: #e2e8f0 !important;
+}
+
+/* 4. Warm Ochre (Slack Sunset) */
+html[data-theme="Warm Ochre"] body,
+html[data-theme="Warm Ochre"] .bg-\[\#121317\] {
+  background-color: #4A154B !important;
+}
+html[data-theme="Warm Ochre"] .bg-\[\#1A1D21\],
+html[data-theme="Warm Ochre"] .bg-\[\#16181D\] {
+  background-color: #1C1625 !important;
+}
+html[data-theme="Warm Ochre"] .bg-\[\#14161B\] {
+  background-color: #251C30 !important;
+}
+html[data-theme="Warm Ochre"] .bg-\[\#2B4BCA\] {
+  background-color: #D97706 !important;
+}
+html[data-theme="Warm Ochre"] .border-gray-800,
+html[data-theme="Warm Ochre"] .border-gray-800\/50,
+html[data-theme="Warm Ochre"] .border-\[\#2A2B32\]\/50 {
+  border-color: rgba(217, 119, 6, 0.25) !important;
+}
+
+/* 5. Tritanopia Emerald (Slack Forest) */
+html[data-theme="Tritanopia Emerald"] body,
+html[data-theme="Tritanopia Emerald"] .bg-\[\#121317\] {
+  background-color: #0B1D17 !important;
+}
+html[data-theme="Tritanopia Emerald"] .bg-\[\#1A1D21\],
+html[data-theme="Tritanopia Emerald"] .bg-\[\#16181D\] {
+  background-color: #0F231C !important;
+}
+html[data-theme="Tritanopia Emerald"] .bg-\[\#14161B\] {
+  background-color: #142C23 !important;
+}
+html[data-theme="Tritanopia Emerald"] .bg-\[\#2B4BCA\] {
+  background-color: #007A5A !important;
+}
+html[data-theme="Tritanopia Emerald"] .border-gray-800,
+html[data-theme="Tritanopia Emerald"] .border-gray-800\/50,
+html[data-theme="Tritanopia Emerald"] .border-\[\#2A2B32\]\/50 {
+  border-color: rgba(0, 122, 90, 0.3) !important;
+}
+
+/* 6. OLED Pitch Black */
+html[data-theme="OLED Pitch Black"] body,
+html[data-theme="OLED Pitch Black"] .bg-\[\#121317\] {
+  background-color: #000000 !important;
+}
+html[data-theme="OLED Pitch Black"] .bg-\[\#1A1D21\],
+html[data-theme="OLED Pitch Black"] .bg-\[\#16181D\] {
+  background-color: #09090C !important;
+}
+html[data-theme="OLED Pitch Black"] .bg-\[\#14161B\] {
+  background-color: #0E0E12 !important;
+}
+html[data-theme="OLED Pitch Black"] .bg-\[\#2B4BCA\] {
+  background-color: #1164A3 !important;
+}
+html[data-theme="OLED Pitch Black"] .border-gray-800,
+html[data-theme="OLED Pitch Black"] .border-gray-800\/50,
+html[data-theme="OLED Pitch Black"] .border-\[\#2A2B32\]\/50 {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+
