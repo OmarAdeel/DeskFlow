@@ -33,12 +33,14 @@ import { UserProfileModal } from './components/UserProfileModal';
 import { FloatingHuddleWidget } from './components/FloatingHuddleWidget';
 import { canAccessChannel, useWorkspace } from './context';
 import { LoginScreen } from './components/LoginScreen';
+import { LoadingSplash } from './components/LoadingSplash';
 
 export default function App() {
   const {
     isProfileModalOpen,
     setIsProfileModalOpen,
     isAuthenticated,
+    isAuthInitialized,
     isPasswordRecovery,
     channels,
     users,
@@ -215,9 +217,9 @@ export default function App() {
     }
   };
 
-  if (!isAuthenticated || isPasswordRecovery) {
-    return <LoginScreen />;
-  }
+  if (!isAuthInitialized) return <LoadingSplash />;
+
+  if (!isAuthenticated || isPasswordRecovery) return <LoginScreen />;
 
   return (
     <div className="flex bg-[#121317] font-sans h-screen overflow-hidden text-gray-300 relative">

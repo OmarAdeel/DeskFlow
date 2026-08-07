@@ -169,6 +169,7 @@ interface WorkspaceContextProps {
   setSavedItems: React.Dispatch<React.SetStateAction<string[]>>;
   currentUser: WorkspaceUser | undefined;
   isAuthenticated: boolean;
+  isAuthInitialized: boolean;
   isPasswordRecovery: boolean;
   login: (email: string, password: string) => Promise<string | null>;
   logout: () => void;
@@ -232,6 +233,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthInitialized, setIsAuthInitialized] = useState(false);
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(() => new URLSearchParams(window.location.hash.replace(/^#/, '')).get('type') === 'recovery');
   const [authenticatedUserId, setAuthenticatedUserId] = useState<string | null>(null);
   const [isSupabaseHydrated, setIsSupabaseHydrated] = useState(false);
@@ -640,6 +642,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       const generation = ++hydrationGenerationRef.current;
       if (!user) {
         setAuthenticatedUserId(null); setIsAuthenticated(false); setIsSupabaseHydrated(false); setDrafts([]);
+        setIsAuthInitialized(true);
         return;
       }
       try { await hydrateWorkspace(user, generation); }
@@ -648,6 +651,8 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
         if (active && generation === hydrationGenerationRef.current) {
           setAuthenticatedUserId(null); setIsAuthenticated(false); setIsSupabaseHydrated(false);
         }
+      } finally {
+        if (active && generation === hydrationGenerationRef.current) setIsAuthInitialized(true);
       }
     };
     void supabase.auth.getSession().then(({ data }) => applyUser(data.session?.user || null));
@@ -1130,7 +1135,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       drafts, setDrafts,
       savedItems, setSavedItems,
       currentUser,
-      isAuthenticated, isPasswordRecovery, login, logout,
+      isAuthenticated, isAuthInitialized, isPasswordRecovery, login, logout,
       changeCurrentUserPassword,
       adminSetUserPassword,
       adminCreateUser,
