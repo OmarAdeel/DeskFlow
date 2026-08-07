@@ -173,6 +173,7 @@ interface WorkspaceContextProps {
   logout: () => void;
   changeCurrentUserPassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
   adminSetUserPassword: (userId: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
+  adminCreateUser: (input: { name: string; email: string; username: string; title?: string; phone?: string; role: string; organizationId: string; channelIds: string[] }) => Promise<{ success: boolean; user?: WorkspaceUser; error?: string }>;
   requestPasswordReset: (email: string) => Promise<{ success: boolean; link?: string; error?: string }>;
   resetPasswordWithToken: (token: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
   userLanguage: string;
@@ -906,6 +907,27 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  const adminCreateUser: WorkspaceContextProps['adminCreateUser'] = async input => {
+    if (currentUser?.role !== 'Super Admin') return { success: false, error: 'Only a Super Admin can add workspace users.' };
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return { success: false, error: 'Your session has expired. Sign in again.' };
+    try {
+      const response = await fetch('/api/admin-create-user', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify(input)
+      });
+      const result = await response.json().catch(() => null) as { success?: boolean; user?: WorkspaceUser; error?: string } | null;
+      if (!response.ok || !result?.success || !result.user) return { success: false, error: result?.error || 'Unable to create this user.' };
+      return { success: true, user: result.user };
+    } catch {
+      return { success: false, error: 'The user administration service could not be reached.' };
+    }
+  };
+
   const requestPasswordReset = async (email: string) => {
     const redirectTo = `${window.location.origin}${window.location.pathname}`;
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), { redirectTo });
@@ -1045,6 +1067,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       isAuthenticated, isPasswordRecovery, login, logout,
       changeCurrentUserPassword,
       adminSetUserPassword,
+      adminCreateUser,
       requestPasswordReset,
       resetPasswordWithToken,
       userLanguage, setUserLanguage,

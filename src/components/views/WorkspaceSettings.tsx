@@ -100,7 +100,7 @@ const mockAuditLogs: AuditLogEntry[] = [
 ];
 
 export function WorkspaceSettingsView() {
-  const { workspaceName, setWorkspaceName, channels, setChannels, users, setUsers, organizations, setOrganizations, agents, setAgents, currentUser, activeOrganizationId, adminSetUserPassword, requestPasswordReset } = useWorkspace();
+  const { workspaceName, setWorkspaceName, channels, setChannels, users, setUsers, organizations, setOrganizations, agents, setAgents, currentUser, activeOrganizationId, adminSetUserPassword, adminCreateUser, requestPasswordReset } = useWorkspace();
   const isSuperAdmin = currentUser?.role === 'Super Admin';
   
   // Navigation tabs inside Super Admin Workspace Settings
@@ -165,9 +165,10 @@ export function WorkspaceSettingsView() {
   const [newUserTitle, setNewUserTitle] = useState('');
   const [newUserPhone, setNewUserPhone] = useState('');
   const [newUserRole, setNewUserRole] = useState('Member');
-  const [newUserChannels, setNewUserChannels] = useState<string[]>(['4']);
+  const [newUserChannels, setNewUserChannels] = useState<string[]>([]);
   const [userAddedSuccessToast, setUserAddedSuccessToast] = useState<string | null>(null);
   const [addUserValidationError, setAddUserValidationError] = useState<string | null>(null);
+  const [isCreatingUser, setIsCreatingUser] = useState(false);
 
   const [isAddingAgent, setIsAddingAgent] = useState(false);
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
@@ -406,7 +407,7 @@ export function WorkspaceSettingsView() {
     setLocalUsers(updatedUsers);
   };
 
-  const handleSaveNewUser = (e?: React.FormEvent) => {
+  const handleSaveNewUser = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setAddUserValidationError(null);
 
@@ -430,33 +431,46 @@ export function WorkspaceSettingsView() {
       return;
     }
 
-    const newUser = {
-      id: 'user_' + Date.now().toString(),
+    if (!activeOrganizationId) {
+      setAddUserValidationError('Select an organization before adding a user.');
+      return;
+    }
+
+    setIsCreatingUser(true);
+    const result = await adminCreateUser({
       name: fullName,
-      email: email,
+      email,
       title: newUserTitle.trim() || undefined,
       phone: newUserPhone.trim() || undefined,
       role: newUserRole,
-      channelIds: newUserRole === 'Member' ? newUserChannels : undefined,
-      username: email.split('@')[0] || firstName.toLowerCase()
-    };
+      channelIds: newUserRole === 'Member' ? newUserChannels : scopedChannels.map(channel => channel.id),
+      username: email.split('@')[0] || firstName.toLowerCase(),
+      organizationId: activeOrganizationId
+    });
+    setIsCreatingUser(false);
+    if (!result.success || !result.user) {
+      setAddUserValidationError(result.error || 'Unable to add this user.');
+      return;
+    }
 
-    const updatedUsers = [...users.filter(u => u.id !== newUser.id), newUser];
-    const updatedChannels = localChannels.map(channel => channel.memberIds
-      ? {
-          ...channel,
-          memberIds: newUserChannels.includes(channel.id)
-            ? Array.from(new Set([...channel.memberIds, newUser.id]))
-            : channel.memberIds
-        }
+    const newUser = result.user;
+    const updatedUsers = [...users.filter(user => user.id !== newUser.id), newUser];
+    const assignedChannelIds = new Set(newUser.channelIds || []);
+    const updatedChannels = localChannels.map(channel => assignedChannelIds.has(channel.id)
+      ? { ...channel, memberIds: Array.from(new Set([...(channel.memberIds || []), newUser.id])) }
       : channel
     );
+    const updatedOrganizations = organizations.map(organization => organization.id === activeOrganizationId
+      ? { ...organization, memberIds: Array.from(new Set([...organization.memberIds, newUser.id])) }
+      : organization
+    );
+    setOrganizations(updatedOrganizations);
     setChannels(updatedChannels);
     setUsers(updatedUsers);
     setLocalChannels(updatedChannels);
     setLocalUsers(updatedUsers);
 
-    setUserAddedSuccessToast(`User ${fullName} (${email}) was successfully added to your database!`);
+    setUserAddedSuccessToast(`User ${fullName} (${email}) was created. Set their initial password from Manage password.`);
     setTimeout(() => setUserAddedSuccessToast(null), 5000);
 
     setIsAddingUser(false);
@@ -466,7 +480,7 @@ export function WorkspaceSettingsView() {
     setNewUserTitle('');
     setNewUserPhone('');
     setNewUserRole('Member');
-    setNewUserChannels(['4']);
+    setNewUserChannels([]);
   };
 
   const [editingChannelId, setEditingChannelId] = useState<string | null>(null);
@@ -1682,10 +1696,11 @@ export function WorkspaceSettingsView() {
                 </button>
                 <button 
                   type="submit"
-                  className="px-5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-500 rounded-lg transition shadow-lg shadow-blue-900/30 flex items-center space-x-2 cursor-pointer"
+                  disabled={isCreatingUser}
+                  className="px-5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-not-allowed rounded-lg transition shadow-lg shadow-blue-900/30 flex items-center space-x-2 cursor-pointer"
                 >
                   <UserCheck className="h-4 w-4" />
-                  <span>Invite Member</span>
+                  <span>{isCreatingUser ? 'Creating…' : 'Invite Member'}</span>
                 </button>
               </div>
             </form>
