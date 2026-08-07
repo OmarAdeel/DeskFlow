@@ -3,13 +3,14 @@ import { useEffect, useRef, useState } from 'react';
 import { useWorkspace } from '../context';
 import { getTranslation } from '../utils/i18n';
 import { useWebAppFeatures } from '../hooks/useWebAppFeatures';
+import { PresenceDot } from './UserAvatar';
 
 interface TopNavProps {
   onOpenMobileMenu?: () => void;
 }
 
 export function TopNav({ onOpenMobileMenu }: TopNavProps) {
-  const { setIsProfileModalOpen, userLanguage, currentUser, logout } = useWorkspace();
+  const { setIsProfileModalOpen, userLanguage, currentUser, presenceByUserId, logout } = useWorkspace();
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [accountMessage, setAccountMessage] = useState<string | null>(null);
   const { installAvailable, isInstalled, installApp, notificationPermission, notificationsEnabled, toggleNotifications } = useWebAppFeatures();
@@ -95,8 +96,9 @@ export function TopNav({ onOpenMobileMenu }: TopNavProps) {
             className="flex items-center gap-1 rounded-lg p-0.5 text-gray-300 hover:bg-gray-800 transition cursor-pointer"
             title={isArabic ? "حسابي" : "My account"}
           >
-            <span className="w-7 h-7 rounded-lg bg-[#4CAF50] text-[#121317] font-extrabold text-xs flex items-center justify-center shadow-sm border border-gray-800 overflow-hidden">
-              {currentUser?.avatarUrl ? <img src={currentUser.avatarUrl} alt="Profile" className="w-full h-full object-cover" /> : (currentUser?.name ? currentUser.name.charAt(0) : 'A')}
+            <span className="relative w-7 h-7 rounded-lg bg-[#4CAF50] text-[#121317] font-extrabold text-xs flex items-center justify-center shadow-sm border border-gray-800">
+              {currentUser?.avatarUrl ? <img src={currentUser.avatarUrl} alt="Profile" className="w-full h-full rounded-lg object-cover" /> : (currentUser?.name ? currentUser.name.charAt(0) : 'A')}
+              <PresenceDot status={currentUser ? presenceByUserId[currentUser.id]?.status || 'offline' : 'offline'} className="absolute -bottom-1 -right-1 h-2.5 w-2.5" />
             </span>
             <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isAccountMenuOpen ? 'rotate-180' : ''}`} />
           </button>

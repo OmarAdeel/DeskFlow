@@ -8,7 +8,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { canAccessChannel, useWorkspace } from '../../context';
 import { EmojiDeluxe } from '../EmojiDeluxe';
 import { FormattedMessage } from '../FormattedMessage';
-import { UserAvatar } from '../UserAvatar';
+import { PresenceDot, UserAvatar, presenceLabel } from '../UserAvatar';
 import { DisplayName } from '../DisplayName';
 import { AgentConversationMessage, buildAgentWorkspaceContext, requestAgentReply } from '../../utils/agentResponse';
 
@@ -33,19 +33,20 @@ interface DMMessage {
 }
 
 export function DMsView({ userId }: { userId?: string }) {
-  const { users, currentUser, userStatus, organizations, agents, messages, channels, activeOrganizationId } = useWorkspace();
+  const { users, currentUser, presenceByUserId, userStatus, organizations, agents, messages, channels, activeOrganizationId } = useWorkspace();
   const organizationUsers = users.filter(user => {
     if (!activeOrganizationId) return true;
     return Boolean(user.organizationIds?.includes(activeOrganizationId));
   });
 
-  const systemUsers = organizationUsers.map((u, index) => ({
+  const systemUsers = organizationUsers.map(u => ({
     id: u.id,
     name: u.name,
     role: u.title || u.role || 'Team Member',
-    online: u.name === 'Abdallah Sayed' ? true : index % 2 === 0,
-    lastSeen: index % 3 === 0 ? 'Now' : `${index + 1}h ago`,
-    unread: index === 0 ? 2 : index === 3 ? 1 : 0,
+    presence: u.isAgent ? 'online' as const : presenceByUserId[u.id]?.status || 'offline' as const,
+    online: u.isAgent || presenceByUserId[u.id]?.status === 'online',
+    lastSeen: presenceByUserId[u.id]?.lastSeenAt ? new Date(presenceByUserId[u.id].lastSeenAt!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'recently',
+    unread: 0,
     avatarUrl: u.avatarUrl,
     avatarSeed: u.name,
     isAgent: Boolean(u.isAgent)
@@ -70,15 +71,18 @@ export function DMsView({ userId }: { userId?: string }) {
       setMobileShowChat(true);
       return;
     }
-    if (!systemUsers.some(user => user.id === selectedUser.id)) {
-      const nextUser = systemUsers.find(user => user.id !== currentUser?.id) || systemUsers[0];
-      if (nextUser) {
-        setSelectedUser(nextUser);
-        setActiveThreadId(null);
-      }
-      setMobileShowChat(false);
+    const refreshedSelection = systemUsers.find(user => user.id === selectedUser.id);
+    if (refreshedSelection) {
+      setSelectedUser(refreshedSelection);
+      return;
     }
-  }, [userId, users, activeOrganizationId]);
+    const nextUser = systemUsers.find(user => user.id !== currentUser?.id) || systemUsers[0];
+    if (nextUser) {
+      setSelectedUser(nextUser);
+      setActiveThreadId(null);
+    }
+    setMobileShowChat(false);
+  }, [userId, users, activeOrganizationId, presenceByUserId]);
 
   useEffect(() => {
     const handleIncomingComposeMessage = (event: Event) => {
@@ -1175,9 +1179,7 @@ export function DMsView({ userId }: { userId?: string }) {
                 <div className="flex items-center space-x-3">
                   <div className="w-9 h-9 rounded-md bg-[#2A2B32] font-mono font-bold flex items-center justify-center text-blue-400 border border-gray-700 shrink-0 relative">
                     <UserAvatar user={user} className="w-full h-full rounded object-cover" alt={user.name} />
-                    {user.online && (
-                      <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 rounded-full border-2 border-[#121317]"></div>
-                    )}
+                    <PresenceDot status={user.presence} className="absolute -bottom-0.5 -right-0.5 h-3 w-3" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-center mb-0.5">
@@ -1212,16 +1214,14 @@ export function DMsView({ userId }: { userId?: string }) {
             >
               <ArrowLeft className="h-5 w-5" />
             </button>
-            <div className="w-9 h-9 rounded bg-[#2A2B32] border border-gray-700 relative overflow-hidden shrink-0">
-              <UserAvatar user={selectedUser} className="h-full w-full object-cover" alt={selectedUser.name} />
-              {selectedUser.online && (
-                <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-green-500 rounded-full border border-[#121317]"></div>
-              )}
+            <div className="w-9 h-9 rounded bg-[#2A2B32] border border-gray-700 relative shrink-0">
+              <UserAvatar user={selectedUser} className="h-full w-full rounded object-cover" alt={selectedUser.name} />
+              <PresenceDot status={selectedUser.presence} className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5" />
             </div>
             <div className="min-w-0">
               <h3 className="font-bold text-gray-100 text-sm truncate"><DisplayName name={selectedUser.name} isAgent={selectedUser.isAgent} /></h3>
               <p className="text-[10px] text-emerald-400 flex items-center gap-1 leading-none mt-0.5 truncate">
-                {selectedUser.online ? 'Active now' : `Last seen ${selectedUser.lastSeen}`} • {selectedUser.role}
+                {selectedUser.presence === 'offline' ? `Offline · Last seen ${selectedUser.lastSeen}` : presenceLabel(selectedUser.presence)} • {selectedUser.role}
               </p>
               {selectedUser.isAgent && agentStatus && (
                 <p className="text-[10px] text-violet-300 flex items-center gap-1 mt-1 animate-pulse"><Bot className="h-3 w-3" /> {agentStatus === 'searching' ? 'Searching…' : agentStatus === 'thinking' ? 'Thinking…' : agentStatus === 'checking' ? 'Checking workspace context…' : 'Typing…'}</p>

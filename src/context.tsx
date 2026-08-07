@@ -38,6 +38,13 @@ export function canAccessChannel(
   return Boolean(user.channelIds?.includes(channel.id));
 }
 
+export type PresenceStatus = 'online' | 'away' | 'dnd' | 'meeting' | 'offline';
+
+export interface UserPresence {
+  status: PresenceStatus;
+  lastSeenAt?: number;
+}
+
 export interface WorkspaceUser {
   id: string;
   name: string;
@@ -168,6 +175,7 @@ interface WorkspaceContextProps {
   savedItems: string[];
   setSavedItems: React.Dispatch<React.SetStateAction<string[]>>;
   currentUser: WorkspaceUser | undefined;
+  presenceByUserId: Record<string, UserPresence>;
   isAuthenticated: boolean;
   isAuthInitialized: boolean;
   isPasswordRecovery: boolean;
@@ -322,6 +330,8 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     }
     return savedTheme || 'Dark Enterprise';
   });
+
+  const [presenceByUserId, setPresenceByUserId] = useState<Record<string, UserPresence>>({});
 
   const [userStatus, setUserStatus] = useState<string>(() => {
     return localStorage.getItem('workspace_user_status') || 'Online';
@@ -996,6 +1006,68 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
   };
 
   useEffect(() => {
+    if (!isAuthenticated || !authenticatedUserId) {
+      setPresenceByUserId({});
+      return;
+    }
+    const presenceChannel = supabase.channel('deskflow-online-presence', {
+      config: { presence: { key: authenticatedUserId } }
+    });
+    const effectiveStatus = (): PresenceStatus => {
+      if (!navigator.onLine) return 'offline';
+      if (document.visibilityState !== 'visible') return 'away';
+      if (userStatus === 'Do Not Disturb') return 'dnd';
+      if (userStatus === 'In a Meeting') return 'meeting';
+      if (userStatus === 'Away') return 'away';
+      return 'online';
+    };
+    const publishPresence = () => {
+      if (presenceChannel.state === 'joined') {
+        void presenceChannel.track({ user_id: authenticatedUserId, status: effectiveStatus(), online_at: Date.now() });
+      }
+    };
+    const syncPresence = () => {
+      const state = presenceChannel.presenceState() as Record<string, Array<{ user_id?: string; status?: PresenceStatus; online_at?: number }>>;
+      setPresenceByUserId(previous => {
+        const next: Record<string, UserPresence> = {};
+        users.filter(user => !user.isAgent).forEach(user => {
+          const entries = state[user.id] || [];
+          const statuses = entries.map(entry => entry.status).filter(Boolean) as PresenceStatus[];
+          const status: PresenceStatus = statuses.includes('online') ? 'online'
+            : statuses.includes('meeting') ? 'meeting'
+              : statuses.includes('dnd') ? 'dnd'
+                : statuses.includes('away') ? 'away'
+                  : 'offline';
+          next[user.id] = {
+            status,
+            lastSeenAt: status === 'offline' ? previous[user.id]?.lastSeenAt || Date.now() : undefined
+          };
+        });
+        return next;
+      });
+    };
+    presenceChannel
+      .on('presence', { event: 'sync' }, syncPresence)
+      .on('presence', { event: 'leave' }, syncPresence)
+      .subscribe(status => {
+        if (status === 'SUBSCRIBED') {
+          publishPresence();
+          syncPresence();
+        }
+      });
+    document.addEventListener('visibilitychange', publishPresence);
+    window.addEventListener('online', publishPresence);
+    window.addEventListener('offline', publishPresence);
+    return () => {
+      document.removeEventListener('visibilitychange', publishPresence);
+      window.removeEventListener('online', publishPresence);
+      window.removeEventListener('offline', publishPresence);
+      void presenceChannel.untrack();
+      void supabase.removeChannel(presenceChannel);
+    };
+  }, [authenticatedUserId, isAuthenticated, userStatus, users]);
+
+  useEffect(() => {
     if (!isAuthenticated || !authenticatedUserId || !currentUser) return;
     const channel = supabase.channel(`deskflow-message-notifications-${authenticatedUserId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
@@ -1135,6 +1207,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       drafts, setDrafts,
       savedItems, setSavedItems,
       currentUser,
+      presenceByUserId,
       isAuthenticated, isAuthInitialized, isPasswordRecovery, login, logout,
       changeCurrentUserPassword,
       adminSetUserPassword,

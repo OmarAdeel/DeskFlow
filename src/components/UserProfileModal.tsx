@@ -6,6 +6,7 @@ import {
 import { useWorkspace } from '../context';
 import { getTranslation } from '../utils/i18n';
 import { useWebAppFeatures } from '../hooks/useWebAppFeatures';
+import { PresenceDot } from './UserAvatar';
 
 interface UserProfileModalProps {
   isOpen: boolean;
@@ -100,7 +101,8 @@ export const STATUS_OPTIONS = [
 
 export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSettings }: UserProfileModalProps) {
   const { 
-    currentUser, 
+    currentUser,
+    presenceByUserId,
     userLanguage, 
     setUserLanguage, 
     userTheme, 
@@ -231,9 +233,7 @@ export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSetting
               <div className="w-10 h-10 rounded-xl bg-[#4CAF50] text-[#121317] font-black flex items-center justify-center text-lg shadow overflow-hidden">
                 {currentUser?.avatarUrl ? <img src={currentUser.avatarUrl} alt="" className="w-full h-full object-cover" /> : (currentUser?.name ? currentUser.name.charAt(0) : 'A')}
               </div>
-              <span className={`absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full border-2 border-[#121317] ${
-                STATUS_OPTIONS.find(s => s.id === userStatus)?.color || 'bg-emerald-500'
-              }`} />
+              <PresenceDot status={currentUser ? presenceByUserId[currentUser.id]?.status || 'offline' : 'offline'} className="absolute -bottom-1 -right-1 h-3.5 w-3.5" />
             </div>
             <div>
               <div className="flex items-center space-x-2 rtl:space-x-reverse">

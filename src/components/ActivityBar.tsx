@@ -2,6 +2,7 @@ import { Plus, Building2, Check } from 'lucide-react';
 import { ViewType } from '../types';
 import { useWorkspace } from '../context';
 import deskflowLogo from '../assets/deskflow-logo.png';
+import { PresenceDot } from './UserAvatar';
 
 interface ActivityBarProps {
   currentView: ViewType;
@@ -11,21 +12,14 @@ interface ActivityBarProps {
 export function ActivityBar({ currentView, onNavigate }: ActivityBarProps) {
   const {
     setIsProfileModalOpen,
-    userStatus,
     currentUser,
+    presenceByUserId,
     accessibleOrganizations,
     activeOrganizationId,
     setActiveOrganizationId
   } = useWorkspace();
 
-  const getStatusBg = () => {
-    switch (userStatus) {
-      case 'Away': return 'bg-amber-500';
-      case 'Do Not Disturb': return 'bg-red-500';
-      case 'In a Meeting': return 'bg-purple-500';
-      default: return 'bg-[#4CAF50]';
-    }
-  };
+  const currentPresence = currentUser ? presenceByUserId[currentUser.id]?.status || 'offline' : 'offline';
 
   return (
     <div className="w-[64px] bg-[#121317] flex flex-col items-center h-full border-r border-[#2A2B32]/50 shrink-0 py-3">
@@ -80,9 +74,7 @@ export function ActivityBar({ currentView, onNavigate }: ActivityBarProps) {
           title="My Profile, Language & Preferences"
         >
             {currentUser?.avatarUrl ? <img src={currentUser.avatarUrl} alt="Profile" className="w-full h-full rounded-lg object-cover" /> : (currentUser?.name ? currentUser.name.charAt(0) : 'A')}
-            <div className={`absolute -bottom-1 -right-1 ${getStatusBg()} text-white w-3.5 h-3.5 flex items-center justify-center rounded-full border-2 border-[#121317] shadow-sm`}>
-              <div className="w-1 h-1 bg-white rounded-full"></div>
-            </div>
+            <PresenceDot status={currentPresence} className="absolute -bottom-1 -right-1 h-3.5 w-3.5" />
          </button>
       </div>
     </div>

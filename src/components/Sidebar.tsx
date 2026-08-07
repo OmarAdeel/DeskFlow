@@ -9,7 +9,7 @@ import { canAccessChannel, useWorkspace } from '../context';
 import { getTranslation } from '../utils/i18n';
 import { useState } from 'react';
 import deskflowLogo from '../assets/deskflow-logo.png';
-import { UserAvatar } from './UserAvatar';
+import { PresenceDot, UserAvatar } from './UserAvatar';
 
 interface SidebarProps {
   currentView: ViewType;
@@ -25,6 +25,7 @@ export function Sidebar({ currentView, currentChannelId, width = 260, onViewChan
     channels,
     users,
     currentUser,
+    presenceByUserId,
     setIsProfileModalOpen,
     userLanguage,
     activeOrganizationId,
@@ -209,8 +210,9 @@ export function Sidebar({ currentView, currentChannelId, width = 260, onViewChan
                      : 'text-gray-400 hover:bg-[#2A2B32]/70 hover:text-gray-200'
                  }`}
                >
-                 <div className={`w-[18px] h-[18px] rounded overflow-hidden ${isArabic ? 'ml-2' : 'mr-2'} shrink-0 bg-gray-700 flex items-center justify-center relative`}>
-                   <UserAvatar user={user} className="w-full h-full object-cover" alt={user.name} />
+                 <div className={`w-[18px] h-[18px] rounded ${isArabic ? 'ml-2' : 'mr-2'} shrink-0 bg-gray-700 flex items-center justify-center relative`}>
+                   <UserAvatar user={user} className="w-full h-full rounded object-cover" alt={user.name} />
+                   <PresenceDot status={user.isAgent ? 'online' : presenceByUserId[user.id]?.status || 'offline'} className="absolute -bottom-0.5 -right-0.5 h-2 w-2" />
                  </div>
                  <span className="truncate flex-1 text-left rtl:text-right">{user.name}</span>
                </button>
@@ -236,10 +238,11 @@ export function Sidebar({ currentView, currentChannelId, width = 260, onViewChan
                 e.stopPropagation();
                 setIsProfileModalOpen(true);
               }}
-              className={`w-[18px] h-[18px] rounded bg-[#4CAF50] hover:brightness-125 ${isArabic ? 'ml-2' : 'mr-2'} shrink-0 text-[#121317] font-bold flex flex-col items-center justify-center text-[10px] leading-none cursor-pointer shadow-sm transition transform hover:scale-110`}
+              className={`relative w-[18px] h-[18px] rounded bg-[#4CAF50] hover:brightness-125 ${isArabic ? 'ml-2' : 'mr-2'} shrink-0 text-[#121317] font-bold flex flex-col items-center justify-center text-[10px] leading-none cursor-pointer shadow-sm transition transform hover:scale-110`}
               title="Click avatar to select Language & Theme preferences"
             >
               {currentUser?.avatarUrl ? <img src={currentUser.avatarUrl} alt="Profile" className="w-full h-full rounded object-cover" /> : (currentUser?.name?.charAt(0) || 'A')}
+              <PresenceDot status={currentUser ? presenceByUserId[currentUser.id]?.status || 'offline' : 'offline'} className="absolute -bottom-0.5 -right-0.5 h-2 w-2" />
             </div>
             <span className="truncate flex-1 text-left rtl:text-right">{currentUser?.name || 'Abdallah Sayed'} <span className="text-gray-500 mx-1 text-[11px]">{isArabic ? '(أنت)' : 'you'}</span></span>
             <button
