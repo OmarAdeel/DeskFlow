@@ -14,6 +14,22 @@ const getBearerToken = (request: Request): string | null => {
 
 const isValidId = (value: string): boolean => /^[a-zA-Z0-9_-]{1,100}$/.test(value);
 
+interface SupabaseErrorBody {
+  code?: string;
+  error?: string;
+  error_code?: string;
+  error_description?: string;
+  message?: string;
+  msg?: string;
+}
+
+const readSupabaseError = async (response: globalThis.Response, fallback: string): Promise<string> => {
+  const detail = await response.json().catch(() => null) as SupabaseErrorBody | null;
+  const message = detail?.message || detail?.msg || detail?.error_description || detail?.error || fallback;
+  const code = detail?.code || detail?.error_code;
+  return code && !message.includes(code) ? `${message} (${code})` : message;
+};
+
 export default async function handler(request: Request, response: Response) {
   if (request.method !== 'POST') {
     response.setHeader('Allow', 'POST');
@@ -55,6 +71,7 @@ export default async function handler(request: Request, response: Response) {
     'Content-Type': 'application/json'
   };
   let createdUserId: string | null = null;
+  let authUserCreatedByThisRequest = false;
 
   try {
     const authHeaders = { Authorization: `Bearer ${accessToken}`, apikey: publishableKey };
@@ -84,23 +101,46 @@ export default async function handler(request: Request, response: Response) {
       if (validChannels.length !== channelIds.length) return sendJson(response, 400, { error: 'One or more selected channels do not belong to this organization.' });
     }
 
-    const createResponse = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
-      method: 'POST',
-      headers: adminHeaders,
-      body: JSON.stringify({
-        email,
-        password: `${randomBytes(32).toString('base64url')}Aa1!`,
-        email_confirm: true,
-        user_metadata: { name }
-      })
-    });
-    if (!createResponse.ok) {
-      const detail = await createResponse.json().catch(() => null) as { message?: string; error?: string } | null;
-      return sendJson(response, createResponse.status, { error: detail?.message || detail?.error || 'Supabase could not create this Auth user.' });
+    const usernameResponse = await fetch(`${supabaseUrl}/rest/v1/profiles?username=eq.${encodeURIComponent(username)}&select=id&limit=1`, { headers: adminHeaders });
+    if (!usernameResponse.ok) throw new Error('Unable to validate the username.');
+    if ((await usernameResponse.json() as unknown[]).length > 0) {
+      return sendJson(response, 409, { error: `The username @${username} is already in use. Choose another email or username.` });
     }
-    const createdUser = await createResponse.json() as { id?: string; user?: { id?: string } };
-    createdUserId = createdUser.id || createdUser.user?.id || null;
-    if (!createdUserId) throw new Error('Supabase did not return the new user ID.');
+
+    const authUsersResponse = await fetch(`${supabaseUrl}/auth/v1/admin/users?page=1&per_page=1000`, { headers: adminHeaders });
+    if (!authUsersResponse.ok) {
+      return sendJson(response, authUsersResponse.status, { error: await readSupabaseError(authUsersResponse, 'Unable to check existing Supabase Auth users.') });
+    }
+    const authUsersPayload = await authUsersResponse.json() as { users?: Array<{ id: string; email?: string }> } | Array<{ id: string; email?: string }>;
+    const authUsers = Array.isArray(authUsersPayload) ? authUsersPayload : authUsersPayload.users || [];
+    const existingAuthUser = authUsers.find(user => user.email?.toLowerCase() === email);
+
+    if (existingAuthUser) {
+      const existingProfileResponse = await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(existingAuthUser.id)}&select=id&limit=1`, { headers: adminHeaders });
+      if (!existingProfileResponse.ok) throw new Error('Unable to check the existing DeskFlow profile.');
+      if ((await existingProfileResponse.json() as unknown[]).length > 0) {
+        return sendJson(response, 409, { error: 'A DeskFlow user with this email already exists. Edit the existing user instead.' });
+      }
+      createdUserId = existingAuthUser.id;
+    } else {
+      const createResponse = await fetch(`${supabaseUrl}/auth/v1/admin/users`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          email,
+          password: `${randomBytes(32).toString('base64url')}Aa1!`,
+          email_confirm: true,
+          user_metadata: { name }
+        })
+      });
+      if (!createResponse.ok) {
+        return sendJson(response, createResponse.status, { error: await readSupabaseError(createResponse, 'Supabase could not create this Auth user.') });
+      }
+      const createdUser = await createResponse.json() as { id?: string; user?: { id?: string } };
+      createdUserId = createdUser.id || createdUser.user?.id || null;
+      if (!createdUserId) throw new Error('Supabase did not return the new user ID.');
+      authUserCreatedByThisRequest = true;
+    }
 
     const profileWrite = await fetch(`${supabaseUrl}/rest/v1/profiles?on_conflict=id`, {
       method: 'POST',
@@ -130,7 +170,7 @@ export default async function handler(request: Request, response: Response) {
       user: { id: createdUserId, name, email, username, role, title: title || null, phone: phone || null, organizationIds: [organizationId], channelIds }
     });
   } catch (error) {
-    if (createdUserId) {
+    if (createdUserId && authUserCreatedByThisRequest) {
       await fetch(`${supabaseUrl}/auth/v1/admin/users/${encodeURIComponent(createdUserId)}`, { method: 'DELETE', headers: adminHeaders }).catch(() => undefined);
     }
     const message = error instanceof Error && error.message ? error.message : 'The server could not create this user.';
