@@ -25,7 +25,7 @@ INSERT INTO users (id, name, email, role, title, phone, avatar_url, status) VALU
   ('usr_john', 'John Doe', 'john.doe@democompany.com', 'Standard User', 'Product Engineer', '+1-555-0101', 'https://i.pravatar.cc/150?u=john', 'active'),
   ('usr_esraa', 'Esraa Soliman', 'esraa@democompany.com', 'Manager', 'Customer Operations Manager', '+1-555-0102', 'https://i.pravatar.cc/150?u=esraa', 'active'),
   ('usr_sarah', 'Sarah Chen', 'sarah@democompany.com', 'Admin', 'Support Lead', '+1-555-0103', 'https://i.pravatar.cc/150?u=sarah', 'active'),
-  ('usr_omar', 'Omar Hassan', 'omar@democompany.com', 'Standard User', 'UX Designer', '+1-555-0104', 'https://i.pravatar.cc/150?u=omar', 'active'),
+  ('usr_omar', 'Omar Hassan', 'omar.hitman2010@gmail.com', 'Standard User', 'UX Designer', '+1-555-0104', 'https://i.pravatar.cc/150?u=omar', 'active'),
   ('usr_guest', 'Demo Guest', 'guest@democompany.com', 'Guest', 'Partner', NULL, 'https://i.pravatar.cc/150?u=guest', 'invited');
 
 INSERT INTO channels (id, name, description, is_private, created_by) VALUES

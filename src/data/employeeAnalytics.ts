@@ -224,7 +224,7 @@ export const mockEmployeeAnalytics: Record<string, EmployeeAnalyticsData> = {
     name: 'Omar Adel',
     role: 'Member',
     title: 'Engineer',
-    email: 'omar@democompany.com',
+    email: 'omar.hitman2010@gmail.com',
     department: 'Engineering',
     performanceScore: 89,
     ratingGrade: 'B+',

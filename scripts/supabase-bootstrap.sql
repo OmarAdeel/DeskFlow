@@ -474,7 +474,7 @@ begin
   select string_agg(seed.email, ', ' order by seed.email) into missing_emails
   from (values
     ('abdallah@democompany.com'),('john.doe@democompany.com'),('esraa@democompany.com'),
-    ('sarah@democompany.com'),('omar@democompany.com'),('guest@democompany.com')
+    ('sarah@democompany.com'),('omar.hitman2010@gmail.com'),('guest@democompany.com')
   ) seed(email)
   left join auth.users auth_user on auth_user.email = seed.email
   where auth_user.id is null;
@@ -490,7 +490,7 @@ from (values
   ('john.doe@democompany.com','John Doe','john.doe','Member','Developer','+1234567890','https://i.pravatar.cc/150?u=john.doe'),
   ('esraa@democompany.com','Esraa Hassan','esraa','Admin','Operations Manager','+1234567891','https://i.pravatar.cc/150?u=esraa'),
   ('sarah@democompany.com','Sarah Ahmed','sarah','Manager','Customer Success Manager','+1234567892','https://i.pravatar.cc/150?u=sarah'),
-  ('omar@democompany.com','Omar Adeel','omar','Member','Product Designer','+1234567893','https://i.pravatar.cc/150?u=omar'),
+  ('omar.hitman2010@gmail.com','Omar Adeel','omar','Member','Product Designer','+1234567893','https://i.pravatar.cc/150?u=omar'),
   ('guest@democompany.com','Guest User','guest','Guest','Guest','','https://i.pravatar.cc/150?u=guest')
 ) seed(email,name,username,role,title,phone,avatar_url)
 join auth.users auth_user on auth_user.email = seed.email
@@ -502,7 +502,7 @@ on conflict (id) do update set name = excluded.name, description = excluded.desc
 
 insert into public.organization_members (organization_id, user_id, role)
 select 'org_demo_company', id, role from public.profiles
-where email in ('abdallah@democompany.com','john.doe@democompany.com','esraa@democompany.com','sarah@democompany.com','omar@democompany.com','guest@democompany.com')
+where email in ('abdallah@democompany.com','john.doe@democompany.com','esraa@democompany.com','sarah@democompany.com','omar.hitman2010@gmail.com','guest@democompany.com')
 on conflict (organization_id, user_id) do update set role = excluded.role;
 
 insert into public.organizations (id, name, description, created_by)
@@ -514,7 +514,7 @@ insert into public.organization_members (organization_id, user_id, role)
 select 'org_northstar', id,
   case when email = 'abdallah@democompany.com' then 'Super Admin' else 'Member' end
 from public.profiles
-where email in ('abdallah@democompany.com','john.doe@democompany.com','omar@democompany.com')
+where email in ('abdallah@democompany.com','john.doe@democompany.com','omar.hitman2010@gmail.com')
 on conflict (organization_id, user_id) do update set role = excluded.role;
 
 insert into public.channels (id, organization_id, name, description, is_private, created_by) values
@@ -529,12 +529,12 @@ on conflict (id) do update set name=excluded.name, description=excluded.descript
 insert into public.channel_members (channel_id, user_id)
 select membership.channel_id, profile.id
 from (values
-('chn_general','abdallah@democompany.com'),('chn_general','john.doe@democompany.com'),('chn_general','esraa@democompany.com'),('chn_general','sarah@democompany.com'),('chn_general','omar@democompany.com'),
-('chn_product','abdallah@democompany.com'),('chn_product','john.doe@democompany.com'),('chn_product','omar@democompany.com'),
+('chn_general','abdallah@democompany.com'),('chn_general','john.doe@democompany.com'),('chn_general','esraa@democompany.com'),('chn_general','sarah@democompany.com'),('chn_general','omar.hitman2010@gmail.com'),
+('chn_product','abdallah@democompany.com'),('chn_product','john.doe@democompany.com'),('chn_product','omar.hitman2010@gmail.com'),
 ('chn_customer_ops','abdallah@democompany.com'),('chn_customer_ops','esraa@democompany.com'),('chn_customer_ops','sarah@democompany.com'),
 ('chn_leadership','abdallah@democompany.com'),('chn_leadership','esraa@democompany.com'),('chn_leadership','sarah@democompany.com'),
-('chn_northstar_general','abdallah@democompany.com'),('chn_northstar_general','john.doe@democompany.com'),('chn_northstar_general','omar@democompany.com'),
-('chn_northstar_launch','abdallah@democompany.com'),('chn_northstar_launch','omar@democompany.com')
+('chn_northstar_general','abdallah@democompany.com'),('chn_northstar_general','john.doe@democompany.com'),('chn_northstar_general','omar.hitman2010@gmail.com'),
+('chn_northstar_launch','abdallah@democompany.com'),('chn_northstar_launch','omar.hitman2010@gmail.com')
 ) as membership(channel_id,email)
 join public.profiles profile on profile.email=membership.email
 on conflict do nothing;
@@ -545,11 +545,11 @@ insert into public.messages (id,organization_id,channel_id,sender_id,content,is_
 ('msg_ops_escalation','org_demo_company','chn_customer_ops',(select id from public.profiles where email='sarah@democompany.com'),'The Acme billing escalation is resolved. I added the follow-up checklist below.',true,'2026-08-04T11:15:00Z'),
 ('msg_leadership_plan','org_demo_company','chn_leadership',(select id from public.profiles where email='esraa@democompany.com'),'Quarterly planning review is scheduled for Friday at 10:00.',false,'2026-08-05T16:00:00Z'),
 ('msg_northstar_welcome','org_northstar','chn_northstar_general',(select id from public.profiles where email='abdallah@democompany.com'),'Welcome to Northstar Labs. This channel and its history are isolated from Demo Company.',true,'2026-08-06T12:00:00Z'),
-('msg_northstar_launch','org_northstar','chn_northstar_launch',(select id from public.profiles where email='omar@democompany.com'),'The launch checklist is ready for the private workspace review.',false,'2026-08-06T13:00:00Z')
+('msg_northstar_launch','org_northstar','chn_northstar_launch',(select id from public.profiles where email='omar.hitman2010@gmail.com'),'The launch checklist is ready for the private workspace review.',false,'2026-08-06T13:00:00Z')
 on conflict (id) do update set content=excluded.content;
 
 insert into public.messages (id,organization_id,channel_id,sender_id,parent_message_id,content,created_at) values
-('msg_product_reply','org_demo_company','chn_product',(select id from public.profiles where email='omar@democompany.com'),'msg_product_launch','I will review the responsive states and leave notes by tomorrow.','2026-08-03T15:05:00Z'),
+('msg_product_reply','org_demo_company','chn_product',(select id from public.profiles where email='omar.hitman2010@gmail.com'),'msg_product_launch','I will review the responsive states and leave notes by tomorrow.','2026-08-03T15:05:00Z'),
 ('msg_ops_reply','org_demo_company','chn_customer_ops',(select id from public.profiles where email='esraa@democompany.com'),'msg_ops_escalation','Thanks Sarah. I will confirm the customer handoff and close the task.','2026-08-04T11:35:00Z')
 on conflict (id) do update set content=excluded.content;
 
@@ -568,7 +568,7 @@ insert into public.messages (id,organization_id,conversation_id,sender_id,conten
 on conflict (id) do update set content=excluded.content;
 
 insert into public.tasks (id,organization_id,title,description,status,priority,creator_id,assignee_id,due_date,source_message_id) values
-('tsk_navigation_review','org_demo_company','Review navigation prototype','Check desktop and mobile states and consolidate feedback.','in_progress','high',(select id from public.profiles where email='john.doe@democompany.com'),(select id from public.profiles where email='omar@democompany.com'),'2026-08-08T17:00:00Z','msg_product_launch'),
+('tsk_navigation_review','org_demo_company','Review navigation prototype','Check desktop and mobile states and consolidate feedback.','in_progress','high',(select id from public.profiles where email='john.doe@democompany.com'),(select id from public.profiles where email='omar.hitman2010@gmail.com'),'2026-08-08T17:00:00Z','msg_product_launch'),
 ('tsk_acme_handoff','org_demo_company','Complete Acme billing handoff','Share the resolved escalation summary with the account owner.','todo','urgent',(select id from public.profiles where email='sarah@democompany.com'),(select id from public.profiles where email='esraa@democompany.com'),'2026-08-07T17:00:00Z','msg_ops_escalation')
 on conflict (id) do update set status=excluded.status, priority=excluded.priority;
 
@@ -585,7 +585,7 @@ on conflict (id) do update set stage=excluded.stage, value=excluded.value;
 
 insert into public.canvases (id,organization_id,title,content,channel_id,creator_id) values
 ('cnv_quarterly_plan','org_demo_company','Q3 Planning Notes','Goals\n- Improve onboarding\n- Reduce support response time\n- Launch enterprise reporting','chn_leadership',(select id from public.profiles where email='abdallah@democompany.com')),
-('cnv_product_feedback','org_demo_company','Product Feedback Board','Customer themes: faster search, better mobile navigation, and flexible notifications.','chn_product',(select id from public.profiles where email='omar@democompany.com'))
+('cnv_product_feedback','org_demo_company','Product Feedback Board','Customer themes: faster search, better mobile navigation, and flexible notifications.','chn_product',(select id from public.profiles where email='omar.hitman2010@gmail.com'))
 on conflict (id) do update set content=excluded.content;
 
 insert into public.agents (id,organization_id,name,username,email,model,job_details,personality,can_search_web,created_by) values
