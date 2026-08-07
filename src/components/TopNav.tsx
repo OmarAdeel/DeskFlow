@@ -1,7 +1,8 @@
-import { Search, Clock, HelpCircle, ArrowLeft, ArrowRight, Globe, Menu, ChevronDown, LogOut, UserCircle } from 'lucide-react';
+import { Clock, HelpCircle, ArrowLeft, ArrowRight, Globe, Menu, ChevronDown, LogOut, UserCircle, Download, Bell, BellOff } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useWorkspace } from '../context';
 import { getTranslation } from '../utils/i18n';
+import { useWebAppFeatures } from '../hooks/useWebAppFeatures';
 
 interface TopNavProps {
   onOpenMobileMenu?: () => void;
@@ -10,6 +11,8 @@ interface TopNavProps {
 export function TopNav({ onOpenMobileMenu }: TopNavProps) {
   const { setIsProfileModalOpen, userLanguage, currentUser, logout } = useWorkspace();
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const [accountMessage, setAccountMessage] = useState<string | null>(null);
+  const { installAvailable, isInstalled, installApp, notificationPermission, notificationsEnabled, toggleNotifications } = useWebAppFeatures();
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const isArabic = userLanguage.includes('Arabic') || userLanguage.includes('العربية');
 
@@ -105,6 +108,7 @@ export function TopNav({ onOpenMobileMenu }: TopNavProps) {
                 <p className="text-[11px] text-gray-500 truncate">{currentUser?.email || 'Local workspace account'}</p>
               </div>
               <div className="p-1.5">
+                {accountMessage && <div className="mx-1.5 mb-1.5 rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-[10px] leading-relaxed text-blue-200">{accountMessage}</div>}
                 <button
                   role="menuitem"
                   onClick={() => {
@@ -116,6 +120,30 @@ export function TopNav({ onOpenMobileMenu }: TopNavProps) {
                   <UserCircle className="h-4 w-4 text-blue-400" />
                   <span>{isArabic ? 'الملف الشخصي والتفضيلات' : 'Profile & preferences'}</span>
                 </button>
+                <button
+                  role="menuitem"
+                  onClick={async () => {
+                    const result = await toggleNotifications();
+                    setAccountMessage(result.message);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-xs text-gray-300 hover:bg-gray-800 hover:text-white transition cursor-pointer"
+                >
+                  {notificationsEnabled ? <BellOff className="h-4 w-4 text-amber-400" /> : <Bell className="h-4 w-4 text-emerald-400" />}
+                  <span>{notificationsEnabled ? 'Disable notifications' : notificationPermission === 'denied' ? 'Notifications blocked' : 'Enable notifications'}</span>
+                </button>
+                <button
+                  role="menuitem"
+                  disabled={isInstalled}
+                  onClick={async () => {
+                    const result = await installApp();
+                    setAccountMessage(result.message || null);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-xs text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50 disabled:cursor-default transition cursor-pointer"
+                >
+                  <Download className="h-4 w-4 text-violet-400" />
+                  <span>{isInstalled ? 'DeskFlow is installed' : installAvailable ? 'Install DeskFlow' : 'Install DeskFlow app'}</span>
+                </button>
+                <div className="my-1 border-t border-gray-800" />
                 <button
                   role="menuitem"
                   onClick={() => {

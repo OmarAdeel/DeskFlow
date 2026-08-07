@@ -1,0 +1,24 @@
+{
+  "name": "DeskFlow",
+  "short_name": "DeskFlow",
+  "description": "Multi-organization team messaging, workflows, and AI collaboration.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#121317",
+  "theme_color": "#121317",
+  "icons": [
+    {
+      "src": "/deskflow-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/deskflow-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

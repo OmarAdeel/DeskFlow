@@ -228,6 +228,16 @@ create index if not exists messages_channel_created_idx on public.messages(chann
 create index if not exists messages_conversation_created_idx on public.messages(conversation_id, created_at);
 create index if not exists messages_parent_idx on public.messages(parent_message_id);
 create index if not exists organization_members_user_idx on public.organization_members(user_id);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'messages'
+  ) then
+    alter publication supabase_realtime add table public.messages;
+  end if;
+end $$;
 create index if not exists channel_members_user_idx on public.channel_members(user_id);
 create index if not exists conversation_members_user_idx on public.conversation_members(user_id);
 
