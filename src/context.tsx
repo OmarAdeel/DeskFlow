@@ -883,7 +883,28 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     return error ? { success: false, error: error.message } : { success: true };
   };
 
-  const adminSetUserPassword = async (_userId: string, _newPassword: string) => ({ success: false, error: 'Send the user a Supabase password-reset email instead.' });
+  const adminSetUserPassword = async (userId: string, newPassword: string) => {
+    if (currentUser?.role !== 'Super Admin') return { success: false, error: 'Only a Super Admin can set another user’s password.' };
+    if (!passwordMeetsRequirements(newPassword)) return { success: false, error: 'Password must be at least 8 characters.' };
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return { success: false, error: 'Your session has expired. Sign in again.' };
+    try {
+      const response = await fetch('/api/admin-set-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({ userId, newPassword })
+      });
+      const result = await response.json().catch(() => null) as { success?: boolean; error?: string } | null;
+      return response.ok && result?.success
+        ? { success: true }
+        : { success: false, error: result?.error || 'Unable to set this password.' };
+    } catch {
+      return { success: false, error: 'The password service could not be reached.' };
+    }
+  };
 
   const requestPasswordReset = async (email: string) => {
     const redirectTo = `${window.location.origin}${window.location.pathname}`;
