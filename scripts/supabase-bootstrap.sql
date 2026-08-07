@@ -490,7 +490,7 @@ from (values
   ('john.doe@democompany.com','John Doe','john.doe','Member','Developer','+1234567890','https://i.pravatar.cc/150?u=john.doe'),
   ('esraa@democompany.com','Esraa Hassan','esraa','Admin','Operations Manager','+1234567891','https://i.pravatar.cc/150?u=esraa'),
   ('sarah@democompany.com','Sarah Ahmed','sarah','Manager','Customer Success Manager','+1234567892','https://i.pravatar.cc/150?u=sarah'),
-  ('omar.hitman2010@gmail.com','Omar Adeel','omar','Member','Product Designer','+1234567893','https://i.pravatar.cc/150?u=omar'),
+  ('omar.hitman2010@gmail.com','Omar Adeel','omar','Super Admin','Product Designer','+1234567893','https://i.pravatar.cc/150?u=omar'),
   ('guest@democompany.com','Guest User','guest','Guest','Guest','','https://i.pravatar.cc/150?u=guest')
 ) seed(email,name,username,role,title,phone,avatar_url)
 join auth.users auth_user on auth_user.email = seed.email
@@ -512,7 +512,7 @@ on conflict (id) do update set name = excluded.name, description = excluded.desc
 
 insert into public.organization_members (organization_id, user_id, role)
 select 'org_northstar', id,
-  case when email = 'abdallah@democompany.com' then 'Super Admin' else 'Member' end
+  case when email in ('abdallah@democompany.com', 'omar.hitman2010@gmail.com') then 'Super Admin' else 'Member' end
 from public.profiles
 where email in ('abdallah@democompany.com','john.doe@democompany.com','omar.hitman2010@gmail.com')
 on conflict (organization_id, user_id) do update set role = excluded.role;
