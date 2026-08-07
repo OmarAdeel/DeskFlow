@@ -830,8 +830,19 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     ]);
     const before = new Map(flatten(previous).map(row => [row.id, row]));
     const nextRows = flatten(next);
-    const changed = nextRows.filter(row => row.senderId === userId && JSON.stringify(before.get(row.id)) !== JSON.stringify(row));
-    const removed = flatten(previous).filter(row => row.senderId === userId && !nextRows.some(candidate => candidate.id === row.id)).map(row => row.id);
+    const changed = nextRows.filter(row => {
+      if (row.senderId !== userId) return false;
+      const previousRow = before.get(row.id);
+      return !previousRow
+        || previousRow.text !== row.text
+        || previousRow.channelId !== row.channelId
+        || previousRow.parentId !== row.parentId
+        || previousRow.timestamp !== row.timestamp;
+    });
+    const canModerateMessages = currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin';
+    const removed = flatten(previous)
+      .filter(row => (row.senderId === userId || canModerateMessages) && !nextRows.some(candidate => candidate.id === row.id))
+      .map(row => row.id);
     if (changed.length) {
       const organizationByChannel = new Map(channels.map(channel => [channel.id, channel.organizationId]));
       const { error } = await supabase.from('messages').upsert(changed.map(row => ({

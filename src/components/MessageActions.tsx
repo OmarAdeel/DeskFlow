@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, SmilePlus, MessageSquare, Forward, Bookmark, MoreVertical, Link as LinkIcon, X, Search, CheckCircle2 } from 'lucide-react';
+import { Check, SmilePlus, MessageSquare, Forward, Bookmark, MoreVertical, Link as LinkIcon, X, Search, CheckCircle2, Pencil, Trash2 } from 'lucide-react';
 import { useWorkspace } from '../context';
 import { EmojiDeluxe } from './EmojiDeluxe';
 import { UserAvatar } from './UserAvatar';
@@ -20,6 +20,14 @@ export function MessageActions({ itemId, onReply }: MessageActionsProps) {
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [forwardSearch, setForwardSearch] = useState('');
   const [forwardedUserIds, setForwardedUserIds] = useState<string[]>([]);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedText, setEditedText] = useState('');
+
+  const parentMessage = messages.find(message => message.id === itemId || message.replies.some(reply => reply.id === itemId));
+  const item = parentMessage?.id === itemId ? parentMessage : parentMessage?.replies.find(reply => reply.id === itemId);
+  const isAuthor = Boolean(item && currentUser?.id === item.senderId);
+  const canEdit = Boolean(isAuthor && item && Date.now() - item.timestamp < 5 * 60 * 1000);
+  const canDelete = Boolean(item && (currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin'));
 
   const toggleSaved = () => {
     setSavedItems(previousItems => previousItems.includes(itemId)
@@ -41,6 +49,46 @@ export function MessageActions({ itemId, onReply }: MessageActionsProps) {
       }
     }
     return { channelId, text };
+  };
+
+  const startEditing = () => {
+    if (!item || !canEdit) return;
+    setEditedText(item.text);
+    setShowMoreMenu(false);
+    setIsEditing(true);
+  };
+
+  const saveEdit = () => {
+    const text = editedText.trim();
+    if (!text || !item || !parentMessage) return;
+    if (!isAuthor || Date.now() - item.timestamp >= 5 * 60 * 1000) {
+      setIsEditing(false);
+      setShowToast('The five-minute editing window has expired.');
+      setTimeout(() => setShowToast(''), 3000);
+      return;
+    }
+    setMessages(previous => previous.map(message => message.id === parentMessage.id
+      ? message.id === itemId
+        ? { ...message, text }
+        : { ...message, replies: message.replies.map(reply => reply.id === itemId ? { ...reply, text } : reply) }
+      : message
+    ));
+    setIsEditing(false);
+    setShowToast('Message updated.');
+    setTimeout(() => setShowToast(''), 2500);
+  };
+
+  const deleteItem = () => {
+    if (!canDelete || !parentMessage || !window.confirm('Delete this message permanently?')) return;
+    setMessages(previous => parentMessage.id === itemId
+      ? previous.filter(message => message.id !== itemId)
+      : previous.map(message => message.id === parentMessage.id
+        ? { ...message, replies: message.replies.filter(reply => reply.id !== itemId) }
+        : message)
+    );
+    const deletedIds = parentMessage.id === itemId ? [itemId, ...parentMessage.replies.map(reply => reply.id)] : [itemId];
+    setSavedItems(previous => previous.filter(savedId => !deletedIds.includes(savedId)));
+    setShowMoreMenu(false);
   };
 
   const copyLink = () => {
@@ -211,10 +259,23 @@ export function MessageActions({ itemId, onReply }: MessageActionsProps) {
                  <LinkIcon className="h-3.5 w-3.5 text-blue-400" />
                  <span>Copy link</span>
                </button>
+               {canEdit && <button onClick={startEditing} className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-gray-300 hover:text-white hover:bg-gray-800 transition-colors"><Pencil className="h-3.5 w-3.5 text-amber-400" /><span>Edit message</span></button>}
+               {canDelete && <button onClick={deleteItem} className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-rose-300 hover:text-rose-200 hover:bg-rose-950/40 transition-colors"><Trash2 className="h-3.5 w-3.5" /><span>Delete message</span></button>}
              </div>
            )}
          </div>
       </div>
+
+      {isEditing && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={() => setIsEditing(false)}>
+          <div className="bg-[#1A1D21] border border-gray-700 rounded-xl w-full max-w-lg p-5 shadow-2xl" onClick={event => event.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4"><h3 className="text-sm font-bold text-white">Edit message</h3><button type="button" onClick={() => setIsEditing(false)} className="text-gray-400 hover:text-white"><X className="h-5 w-5" /></button></div>
+            <textarea value={editedText} onChange={event => setEditedText(event.target.value)} rows={5} autoFocus className="w-full rounded-lg border border-gray-700 bg-[#121317] px-3 py-2 text-sm text-white outline-none focus:border-blue-500 resize-y" />
+            <p className="mt-2 text-[10px] text-gray-500">Messages can be edited for five minutes after posting.</p>
+            <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={() => setIsEditing(false)} className="px-3 py-2 text-xs text-gray-400 hover:text-white">Cancel</button><button type="button" onClick={saveEdit} disabled={!editedText.trim() || !canEdit} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-xs font-bold text-white">Save changes</button></div>
+          </div>
+        </div>
+      )}
 
       {/* Forward Message Modal Popup */}
       {showForwardModal && (

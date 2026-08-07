@@ -343,6 +343,28 @@ as $$
   );
 $$;
 
+create or replace function public.preserve_message_identity()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  new.organization_id := old.organization_id;
+  new.channel_id := old.channel_id;
+  new.conversation_id := old.conversation_id;
+  new.sender_id := old.sender_id;
+  new.parent_message_id := old.parent_message_id;
+  new.created_at := old.created_at;
+  return new;
+end;
+$$;
+
+drop trigger if exists preserve_message_identity on public.messages;
+create trigger preserve_message_identity
+before update on public.messages
+for each row execute function public.preserve_message_identity();
+revoke all on function public.preserve_message_identity() from public, anon, authenticated;
+
 alter table public.profiles enable row level security;
 alter table public.organizations enable row level security;
 alter table public.organization_members enable row level security;
@@ -429,18 +451,22 @@ create policy messages_insert on public.messages for insert to authenticated wit
   sender_id = auth.uid() and private.is_organization_member(organization_id)
   and ((channel_id is not null and private.can_access_channel(channel_id)) or (conversation_id is not null and private.can_access_conversation(conversation_id)))
 );
-create policy messages_author_update on public.messages for update to authenticated
+create policy messages_author_update_within_five_minutes on public.messages for update to authenticated
 using (
   sender_id = auth.uid()
+  and created_at > now() - interval '5 minutes'
   and private.is_organization_member(organization_id)
   and ((channel_id is not null and private.can_access_channel(channel_id)) or (conversation_id is not null and private.can_access_conversation(conversation_id)))
 )
 with check (
   sender_id = auth.uid()
+  and created_at > now() - interval '5 minutes'
   and private.is_organization_member(organization_id)
   and ((channel_id is not null and private.can_access_channel(channel_id)) or (conversation_id is not null and private.can_access_conversation(conversation_id)))
 );
-create policy messages_author_delete on public.messages for delete to authenticated using (sender_id = auth.uid() or private.is_organization_admin(organization_id));
+create policy messages_admin_delete on public.messages for delete to authenticated using (
+  private.is_global_super_admin() or private.is_organization_admin(organization_id)
+);
 
 create policy reactions_visible_message on public.message_reactions for select to authenticated using (exists (select 1 from public.messages m where m.id = message_id));
 create policy reactions_own_insert on public.message_reactions for insert to authenticated with check (user_id = auth.uid() and exists (select 1 from public.messages m where m.id = message_id));
