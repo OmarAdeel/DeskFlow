@@ -31,10 +31,20 @@ import { AppsView } from './components/views/Apps';
 import { NewMessageModal } from './components/NewMessageModal';
 import { UserProfileModal } from './components/UserProfileModal';
 import { FloatingHuddleWidget } from './components/FloatingHuddleWidget';
-import { useWorkspace } from './context';
+import { canAccessChannel, useWorkspace } from './context';
+import { LoginScreen } from './components/LoginScreen';
 
 export default function App() {
-  const { isProfileModalOpen, setIsProfileModalOpen } = useWorkspace();
+  const {
+    isProfileModalOpen,
+    setIsProfileModalOpen,
+    isAuthenticated,
+    channels,
+    users,
+    currentUser,
+    activeOrganizationId
+  } = useWorkspace();
+  const hasPasswordResetToken = new URLSearchParams(window.location.hash.replace(/^#/, '')).has('resetToken');
   const [currentView, setCurrentView] = useState<ViewType>('unreads');
   const [currentChannelId, setCurrentChannelId] = useState<string>('4');
   const [sidebarWidth, setSidebarWidth] = useState(260);
@@ -70,10 +80,25 @@ export default function App() {
   }, [isResizing]);
 
   useEffect(() => {
+    const visibleChannels = channels.filter(channel => canAccessChannel(channel, currentUser, activeOrganizationId));
+    const visibleDmUserIds = new Set(users.filter(user => user.id !== currentUser?.id && (!activeOrganizationId || user.organizationIds?.includes(activeOrganizationId))).map(user => user.id));
+    const currentSelectionIsInvalid = currentView === 'channel'
+      ? !visibleChannels.some(channel => channel.id === currentChannelId)
+      : currentView === 'dms'
+        ? !visibleDmUserIds.has(currentChannelId)
+        : false;
+    if (currentSelectionIsInvalid) {
+      setCurrentView('home');
+      setCurrentChannelId(visibleChannels[0]?.id || '');
+    }
+  }, [activeOrganizationId, channels, users, currentUser, currentView, currentChannelId]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const view = params.get('view') as ViewType;
     const channelId = params.get('channelId');
     const messageId = params.get('messageId');
+    const replyId = params.get('replyId');
     if (view) {
       setCurrentView(view);
     }
@@ -83,7 +108,7 @@ export default function App() {
     if (messageId) {
       setTimeout(() => {
         const threadEvent = new CustomEvent('open-thread', {
-          detail: { messageId }
+          detail: { messageId, replyId }
         });
         window.dispatchEvent(threadEvent);
       }, 300);
@@ -103,7 +128,7 @@ export default function App() {
         if (detail.messageId) {
           setTimeout(() => {
             const threadEvent = new CustomEvent('open-thread', {
-              detail: { messageId: detail.messageId }
+              detail: { messageId: detail.messageId, replyId: detail.replyId }
             });
             window.dispatchEvent(threadEvent);
           }, 200);
@@ -172,7 +197,9 @@ export default function App() {
       case 'threads':
         return <ThreadsView onNavigate={navigateToView} />;
       case 'later':
-        return <LaterView onNavigate={navigateToView} />;
+        return <LaterView onNavigate={navigateToView} title="Later" />;
+      case 'starred':
+        return <LaterView onNavigate={navigateToView} title="Starred" />;
       case 'channel':
         return <ChannelView channelId={currentChannelId} onNavigate={navigateToView} />;
       case 'activity':
@@ -186,6 +213,10 @@ export default function App() {
         );
     }
   };
+
+  if (!isAuthenticated || hasPasswordResetToken) {
+    return <LoginScreen />;
+  }
 
   return (
     <div className="flex bg-[#121317] font-sans h-screen overflow-hidden text-gray-300 relative">

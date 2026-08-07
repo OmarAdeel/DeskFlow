@@ -2,12 +2,14 @@ import {
   AlignLeft, MessageSquare, Headphones, FileEdit, Book, Star, 
   Hash, Lock, ChevronDown, Plus, Settings, ChevronRight, Edit, Shield, LayoutGrid,
   Mail, Kanban, CheckSquare, MessageCircle, Folder, Home, Bell, Bookmark, BarChart3,
-  Workflow, Sparkles, Video, AppWindow, MoreHorizontal
+  Workflow, Sparkles, Video, AppWindow, MoreHorizontal, Building2, Check
 } from 'lucide-react';
 import { ViewType } from '../types';
-import { useWorkspace } from '../context';
+import { canAccessChannel, useWorkspace } from '../context';
 import { getTranslation } from '../utils/i18n';
 import { useState } from 'react';
+import deskflowLogo from '../assets/deskflow-logo.png';
+import { UserAvatar } from './UserAvatar';
 
 interface SidebarProps {
   currentView: ViewType;
@@ -18,8 +20,26 @@ interface SidebarProps {
 }
 
 export function Sidebar({ currentView, currentChannelId, width = 260, onViewChange, onOpenNewMessage }: SidebarProps) {
-  const { workspaceName, channels, users, setIsProfileModalOpen, userLanguage } = useWorkspace();
+  const {
+    workspaceName,
+    channels,
+    users,
+    currentUser,
+    setIsProfileModalOpen,
+    userLanguage,
+    activeOrganizationId,
+    activeOrganization,
+    accessibleOrganizations,
+    setActiveOrganizationId
+  } = useWorkspace();
+  const visibleChannels = channels.filter(channel => canAccessChannel(channel, currentUser, activeOrganizationId));
+  const visibleDmUsers = users.filter(user => {
+    if (user.id === currentUser?.id) return false;
+    if (activeOrganizationId === null) return true;
+    return Boolean(user.organizationIds?.includes(activeOrganizationId));
+  });
   const [isMoreOpen, setIsMoreOpen] = useState(false);
+  const [isOrganizationMenuOpen, setIsOrganizationMenuOpen] = useState(false);
 
   const isArabic = userLanguage.includes('Arabic') || userLanguage.includes('العربية');
 
@@ -53,24 +73,35 @@ export function Sidebar({ currentView, currentChannelId, width = 260, onViewChan
   return (
     <div style={{ width: `${width}px` }} className="bg-[#121317] flex flex-col h-full shrink-0">
       {/* Workspace Header */}
-      <div className="h-14 flex flex-col justify-center px-4 mb-1 cursor-pointer transition-colors group">
+      <div className="relative h-14 flex flex-col justify-center px-4 mb-1 transition-colors group">
         <div className="flex justify-between items-center text-gray-200 group-hover:text-white">
-          <div 
-            onClick={() => onViewChange('workspace-settings')}
-            className="flex items-center font-bold text-lg hover:text-blue-400 transition cursor-pointer"
+          <button
+            type="button"
+            onClick={() => setIsOrganizationMenuOpen(previous => !previous)}
+            className="min-w-0 flex items-center font-bold text-lg hover:text-blue-400 transition cursor-pointer"
+            aria-haspopup="menu"
+            aria-expanded={isOrganizationMenuOpen}
+            title="Switch organization"
           >
-            {workspaceName}
-            <ChevronDown className={`h-4 w-4 ${isArabic ? 'mr-1' : 'ml-1'} opacity-70`} strokeWidth={3} />
-          </div>
+            {activeOrganization?.logoUrl ? (
+              <img src={activeOrganization.logoUrl} alt="" className="h-6 w-6 rounded-md object-cover mr-2" />
+            ) : (
+              <span className="h-6 w-6 rounded-md bg-black border border-cyan-500/30 flex items-center justify-center mr-2 shrink-0 overflow-hidden">
+                <img src={deskflowLogo} alt="DeskFlow" className="h-full w-full object-contain" />
+              </span>
+            )}
+            <span className="truncate">{activeOrganization?.name || workspaceName}</span>
+            <ChevronDown className={`h-4 w-4 ${isArabic ? 'mr-1' : 'ml-1'} opacity-70 shrink-0`} strokeWidth={3} />
+          </button>
           <div className="flex space-x-1.5 rtl:space-x-reverse text-gray-400">
-             <button 
-               onClick={() => onViewChange('workspace-settings')} 
+             <button
+               onClick={() => onViewChange('workspace-settings')}
                className="p-1.5 hover:bg-gray-800 rounded text-gray-200 transition-colors cursor-pointer"
                title={getTranslation(userLanguage, 'workspaceSettings')}
              >
                <Settings className="h-[18px] w-[18px]" strokeWidth={2} />
              </button>
-             <button 
+             <button
                onClick={() => onOpenNewMessage ? onOpenNewMessage() : window.dispatchEvent(new CustomEvent('open-new-message-modal'))}
                className="p-1.5 hover:bg-gray-800 text-gray-200 rounded transition-colors cursor-pointer"
                title="New Message"
@@ -79,6 +110,35 @@ export function Sidebar({ currentView, currentChannelId, width = 260, onViewChan
              </button>
           </div>
         </div>
+        {isOrganizationMenuOpen && (
+          <div className="absolute left-3 right-3 top-12 z-40 rounded-xl border border-gray-700 bg-[#1A1D21] shadow-2xl p-2" role="menu">
+            <p className="px-2 py-1 text-[10px] uppercase tracking-wider font-bold text-gray-500">Organizations</p>
+            {accessibleOrganizations.length === 0 ? (
+              <div className="px-2 py-3 text-xs text-gray-500">
+                <p>No organizations yet.</p>
+                {currentUser?.role === 'Super Admin' && (
+                  <button type="button" onClick={() => { setIsOrganizationMenuOpen(false); onViewChange('workspace-settings'); }} className="mt-2 text-cyan-400 hover:text-cyan-300">Create one in settings</button>
+                )}
+              </div>
+            ) : accessibleOrganizations.map(organization => (
+              <button
+                key={organization.id}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setActiveOrganizationId(organization.id);
+                  setIsOrganizationMenuOpen(false);
+                  onViewChange('home');
+                }}
+                className="flex items-center gap-2 w-full rounded-lg px-2 py-2 text-left text-xs text-gray-300 hover:bg-gray-800/80 hover:text-white"
+              >
+                {organization.logoUrl ? <img src={organization.logoUrl} alt="" className="h-6 w-6 rounded-md object-cover shrink-0" /> : <span className="h-6 w-6 rounded-md bg-black border border-gray-700 flex items-center justify-center shrink-0 overflow-hidden"><img src={deskflowLogo} alt="DeskFlow" className="h-full w-full object-contain" /></span>}
+                <span className="truncate flex-1">{organization.name}</span>
+                {organization.id === activeOrganizationId && <Check className="h-4 w-4 text-cyan-400 shrink-0" />}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Main Nav */}
@@ -117,11 +177,11 @@ export function Sidebar({ currentView, currentChannelId, width = 260, onViewChan
           )}
         </div>
 
-        <SectionHeader label={getTranslation(userLanguage, 'starred')} icon={Star} />
+        <NavItem icon={Star} label={getTranslation(userLanguage, 'starred')} view="starred" active={currentView === 'starred'} iconClass="text-yellow-400" />
 
         <SectionHeader label={getTranslation(userLanguage, 'channels')} icon={ChevronDown} />
         <div className="space-y-[2px]">
-          {channels.map((channel) => (
+          {visibleChannels.map((channel) => (
             <NavItem 
               key={channel.id} 
               id={channel.id}
@@ -137,7 +197,7 @@ export function Sidebar({ currentView, currentChannelId, width = 260, onViewChan
 
         <SectionHeader label={getTranslation(userLanguage, 'directMessages')} icon={ChevronDown} />
         <div className="space-y-[2px] px-2">
-          {users.filter(u => u.name !== 'Abdallah Sayed').map((user) => {
+          {visibleDmUsers.map((user) => {
              const isSelected = currentView === 'dms' && currentChannelId === user.id;
              return (
                <button 
@@ -150,7 +210,7 @@ export function Sidebar({ currentView, currentChannelId, width = 260, onViewChan
                  }`}
                >
                  <div className={`w-[18px] h-[18px] rounded overflow-hidden ${isArabic ? 'ml-2' : 'mr-2'} shrink-0 bg-gray-700 flex items-center justify-center relative`}>
-                   <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name}&backgroundColor=b6e3f4`} alt={user.name} className="w-full h-full object-cover" />
+                   <UserAvatar user={user} className="w-full h-full object-cover" alt={user.name} />
                  </div>
                  <span className="truncate flex-1 text-left rtl:text-right">{user.name}</span>
                </button>
@@ -179,9 +239,9 @@ export function Sidebar({ currentView, currentChannelId, width = 260, onViewChan
               className={`w-[18px] h-[18px] rounded bg-[#4CAF50] hover:brightness-125 ${isArabic ? 'ml-2' : 'mr-2'} shrink-0 text-[#121317] font-bold flex flex-col items-center justify-center text-[10px] leading-none cursor-pointer shadow-sm transition transform hover:scale-110`}
               title="Click avatar to select Language & Theme preferences"
             >
-              A
+              {currentUser?.avatarUrl ? <img src={currentUser.avatarUrl} alt="Profile" className="w-full h-full rounded object-cover" /> : (currentUser?.name?.charAt(0) || 'A')}
             </div>
-            <span className="truncate flex-1 text-left rtl:text-right">Abdallah Sayed <span className="text-gray-500 mx-1 text-[11px]">{isArabic ? '(أنت)' : 'you'}</span></span>
+            <span className="truncate flex-1 text-left rtl:text-right">{currentUser?.name || 'Abdallah Sayed'} <span className="text-gray-500 mx-1 text-[11px]">{isArabic ? '(أنت)' : 'you'}</span></span>
             <button
               type="button"
               onClick={(e) => {

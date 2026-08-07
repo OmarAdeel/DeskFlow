@@ -39,6 +39,26 @@ enum DealStage {
   LOST
 }
 
+model Agent {
+  id                String   @id @default(uuid())
+  name              String
+  username          String   @unique
+  email             String   @unique
+  model             String   @default("gpt-4o-mini")
+  apiBaseUrl        String   @default("https://api.openai.com/v1")
+  encryptedApiKey   String
+  jobDetails        String
+  personality       String
+  canReadOrganizations Boolean @default(true)
+  canReadPublicThreads Boolean @default(true)
+  enabled           Boolean  @default(true)
+  createdById       String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  createdBy         User     @relation("AgentCreators", fields: [createdById], references: [id])
+}
+
 model User {
   id             String          @id @default(uuid())
   name           String
@@ -59,6 +79,7 @@ model User {
   mailAccounts   MailAccount[]
   canvases       Canvas[]
   auditLogs      AuditLog[]
+  createdAgents  Agent[]     @relation("AgentCreators")
 }
 
 model Channel {

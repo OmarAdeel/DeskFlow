@@ -1,12 +1,14 @@
 {
-  "name": "react-example",
+  "name": "deskflow",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port=3000 --host=0.0.0.0",
+    "dev": "vite --host=0.0.0.0 --port=3004 --strictPort",
     "build": "vite build",
     "preview": "vite preview",
+    "db:setup": "sh scripts/setup-local-db.sh",
+    "db:seed": "psql -h ${PGHOST:-localhost} -p ${PGPORT:-5432} -U ${PGUSER:-$USER} -d ${DB_NAME:-deskflow_local} -f scripts/seed-local-db.sql",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
   },
@@ -33,7 +35,6 @@
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3",
     "@types/express": "^4.17.21"
   }
 }

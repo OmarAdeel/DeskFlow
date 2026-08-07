@@ -95,8 +95,8 @@ export function WorkflowsView() {
               </div>
               <p className="text-xs text-gray-400 mt-1">
                 {isArabic 
-                  ? 'قم بأتمتة المهام الروتينية، التنبيهات، ونماذج تجميع البيانات مباشرة داخل قنوات سلاك بدون كود.' 
-                  : 'Automate routine tasks, custom forms, and notification triggers directly inside Slack channels.'
+                  ? 'قم بأتمتة المهام الروتينية، التنبيهات، ونماذج تجميع البيانات مباشرة داخل قنوات DeskFlow بدون كود.'
+                  : 'Automate routine tasks, custom forms, and notification triggers directly inside DeskFlow channels.'
                 }
               </p>
             </div>

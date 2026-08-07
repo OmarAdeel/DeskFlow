@@ -1,20 +1,22 @@
 import React, { useState } from 'react';
 import { Book, Search, Hash, Lock, Users as UsersIcon, Mail } from 'lucide-react';
-import { useWorkspace } from '../../context';
+import { canAccessChannel, useWorkspace } from '../../context';
+import { UserAvatar } from '../UserAvatar';
 
 export function DirectoriesView() {
-  const { users, channels } = useWorkspace();
+  const { users, channels, currentUser, activeOrganizationId } = useWorkspace();
   const [activeTab, setActiveTab] = useState<'users' | 'channels'>('users');
   const [search, setSearch] = useState('');
 
-  const filteredUsers = users.filter(u => 
-    u.name.toLowerCase().includes(search.toLowerCase()) || 
+  const filteredUsers = users.filter(u =>
+    (!activeOrganizationId || u.organizationIds?.includes(activeOrganizationId)) &&
+    (u.name.toLowerCase().includes(search.toLowerCase()) ||
     u.email.toLowerCase().includes(search.toLowerCase()) ||
-    u.role.toLowerCase().includes(search.toLowerCase())
+    u.role.toLowerCase().includes(search.toLowerCase()))
   );
 
-  const filteredChannels = channels.filter(c => 
-    c.name.toLowerCase().includes(search.toLowerCase())
+  const filteredChannels = channels.filter(c =>
+    canAccessChannel(c, currentUser, activeOrganizationId) && c.name.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
@@ -63,7 +65,7 @@ export function DirectoriesView() {
               {filteredUsers.map(user => (
                 <div key={user.id} className="bg-[#121317] border border-gray-800 rounded-xl p-4 flex items-start space-x-4">
                   <div className="h-12 w-12 rounded bg-gray-700 shrink-0 overflow-hidden">
-                    <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name}&backgroundColor=b6e3f4`} alt={user.name} />
+                    <UserAvatar user={user} className="h-full w-full object-cover" alt={user.name} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <h3 className="text-gray-100 font-bold truncate">{user.name}</h3>

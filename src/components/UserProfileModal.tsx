@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   X, Globe, Palette, Check, User, Shield, CheckCircle2,
-  ChevronRight, Settings
+  ChevronRight, Settings, KeyRound, AlertCircle
 } from 'lucide-react';
 import { useWorkspace } from '../context';
 import { getTranslation } from '../utils/i18n';
@@ -20,8 +20,8 @@ export const LANGUAGES = [
 export const THEMES = [
   { 
     id: 'Aubergine', 
-    name: 'Aubergine (Classic Slack)', 
-    desc: 'Slack iconic signature dark purple sidebar with crisp blue active highlight.',
+    name: 'Aubergine (DeskFlow Classic)',
+    desc: 'DeskFlow signature dark purple sidebar with a crisp blue active highlight.',
     badge: 'Iconic',
     bg: 'bg-[#3F0E40]', 
     cardBg: 'bg-[#1F1A24]', 
@@ -31,7 +31,7 @@ export const THEMES = [
   { 
     id: 'Aubergine Light', 
     name: 'Aubergine Light', 
-    desc: 'Classic Slack signature purple sidebar paired with a clean white canvas.',
+    desc: 'Classic DeskFlow purple sidebar paired with a clean white canvas.',
     badge: 'Classic Light',
     bg: 'bg-[#3F0E40]', 
     cardBg: 'bg-white', 
@@ -40,17 +40,17 @@ export const THEMES = [
   },
   { 
     id: 'Mood Indigo', 
-    name: 'Mood Indigo (Slack Dark)', 
-    desc: 'Default Slack Dark mode designed for low-light focus and reduced eye strain.',
-    badge: 'Slack Dark',
+    name: 'Mood Indigo (DeskFlow Dark)',
+    desc: 'Default DeskFlow dark mode designed for low-light focus and reduced eye strain.',
+    badge: 'DeskFlow Dark',
     bg: 'bg-[#19171D]', 
     cardBg: 'bg-[#1A1D21]', 
     accent: 'bg-[#1164A3]',
     border: 'border-gray-800'
   },
   { 
-    id: 'Slack Clean Light', 
-    name: 'Slack Clean Light', 
+    id: 'DeskFlow Clean Light',
+    name: 'DeskFlow Clean Light',
     desc: 'Crisp daylight theme with neutral light gray sidebar and clean white canvas.',
     badge: 'Clean Light',
     bg: 'bg-[#F8F8F8]', 
@@ -60,8 +60,8 @@ export const THEMES = [
   },
   { 
     id: 'Warm Ochre', 
-    name: 'Warm Ochre (Slack Sunset)', 
-    desc: 'Warm evening purple and amber theme inspired by Slack dusk presets.',
+    name: 'Warm Ochre (DeskFlow Sunset)',
+    desc: 'Warm evening purple and amber theme inspired by DeskFlow dusk presets.',
     badge: 'Warm',
     bg: 'bg-[#4A154B]', 
     cardBg: 'bg-[#1C1625]', 
@@ -70,7 +70,7 @@ export const THEMES = [
   },
   { 
     id: 'Tritanopia Emerald', 
-    name: 'Tritanopia Emerald (Slack Forest)', 
+    name: 'Tritanopia Emerald (DeskFlow Forest)',
     desc: 'Deep forest green sidebar with emerald active highlights and accessible contrast.',
     badge: 'Forest',
     bg: 'bg-[#0B1D17]', 
@@ -94,7 +94,7 @@ export const STATUS_OPTIONS = [
   { id: 'Online', labelKey: 'online' as const, labelEn: 'Online', color: 'bg-emerald-500', icon: '🟢' },
   { id: 'Away', labelKey: 'away' as const, labelEn: 'Away', color: 'bg-amber-500', icon: '🟡' },
   { id: 'Do Not Disturb', labelKey: 'dnd' as const, labelEn: 'Do Not Disturb', color: 'bg-red-500', icon: '🔴' },
-  { id: 'In a Meeting', labelKey: 'inMeeting' as const, labelEn: 'In a Meeting', color: 'bg-purple-500', icon: '💜' }
+  { id: 'In a Meeting', labelKey: 'inMeeting' as const, labelEn: 'In a Meeting', color: 'bg-purple-500', icon: '📅' }
 ];
 
 export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSettings }: UserProfileModalProps) {
@@ -105,11 +105,31 @@ export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSetting
     userTheme, 
     setUserTheme,
     userStatus,
-    setUserStatus
+    setUserStatus,
+    updateCurrentUserProfile,
+    changeCurrentUserPassword
   } = useWorkspace();
 
-  const [activeTab, setActiveTab] = useState<'general' | 'language' | 'theme'>('language');
+  const [activeTab, setActiveTab] = useState<'general' | 'language' | 'theme' | 'security'>('language');
   const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
+  const [profileName, setProfileName] = useState(currentUser?.name || '');
+  const [profileEmail, setProfileEmail] = useState(currentUser?.email || '');
+  const [profilePhone, setProfilePhone] = useState(currentUser?.phone || '');
+  const [profileTitle, setProfileTitle] = useState(currentUser?.title || '');
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState(currentUser?.avatarUrl || '');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const profileImageInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setProfileName(currentUser?.name || '');
+    setProfileEmail(currentUser?.email || '');
+    setProfilePhone(currentUser?.phone || '');
+    setProfileTitle(currentUser?.title || '');
+    setProfileAvatarUrl(currentUser?.avatarUrl || '');
+  }, [currentUser?.id, currentUser?.name, currentUser?.email, currentUser?.phone, currentUser?.title, currentUser?.avatarUrl]);
 
   if (!isOpen) return null;
 
@@ -129,6 +149,73 @@ export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSetting
 
   const isArabic = userLanguage.includes('Arabic') || userLanguage.includes('العربية');
 
+  const handleProfileImageChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setNotificationMessage(isArabic ? 'يرجى اختيار ملف صورة صالح.' : 'Please choose a valid image file.');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setNotificationMessage(isArabic ? 'يجب أن تكون الصورة بحجم 2 ميجابايت أو أقل.' : 'The image must be 2 MB or smaller.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setProfileAvatarUrl(reader.result);
+        setNotificationMessage(isArabic ? 'تم تحميل الصورة. احفظ ملفك الشخصي لتطبيقها.' : 'Image uploaded. Save your profile to apply it.');
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleChangePassword = async () => {
+    setPasswordError(null);
+    if (newPassword !== confirmPassword) {
+      setPasswordError(isArabic ? 'كلمتا المرور غير متطابقتين.' : 'New passwords do not match.');
+      return;
+    }
+    const result = await changeCurrentUserPassword(currentPassword, newPassword);
+    if (!result.success) {
+      setPasswordError(result.error || (isArabic ? 'تعذر تغيير كلمة المرور.' : 'Unable to change password.'));
+      return;
+    }
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setNotificationMessage(isArabic ? 'تم تغيير كلمة المرور.' : 'Password changed successfully.');
+    setTimeout(() => setNotificationMessage(null), 3000);
+  };
+
+  const handleSaveProfile = () => {
+    const name = profileName.trim();
+    const email = profileEmail.trim();
+    const phone = profilePhone.trim();
+    const emailIsValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
+    if (!name || !email) {
+      setNotificationMessage(isArabic ? 'الاسم والبريد الإلكتروني مطلوبان.' : 'Name and email are required.');
+      return;
+    }
+    if (!emailIsValid) {
+      setNotificationMessage(isArabic ? 'يرجى إدخال عنوان بريد إلكتروني صالح.' : 'Please enter a valid email address.');
+      return;
+    }
+
+    updateCurrentUserProfile({
+      name,
+      email,
+      phone: phone || undefined,
+      title: profileTitle.trim() || undefined,
+      avatarUrl: profileAvatarUrl || undefined
+    });
+    setNotificationMessage(isArabic ? 'تم تحديث ملفك الشخصي.' : 'Profile updated successfully.');
+    setTimeout(() => setNotificationMessage(null), 3000);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
       <div 
@@ -139,8 +226,8 @@ export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSetting
         <div className="px-6 py-4 border-b border-gray-800 bg-[#121317] flex items-center justify-between">
           <div className="flex items-center space-x-3 rtl:space-x-reverse">
             <div className="relative">
-              <div className="w-10 h-10 rounded-xl bg-[#4CAF50] text-[#121317] font-black flex items-center justify-center text-lg shadow">
-                {currentUser?.name ? currentUser.name.charAt(0) : 'A'}
+              <div className="w-10 h-10 rounded-xl bg-[#4CAF50] text-[#121317] font-black flex items-center justify-center text-lg shadow overflow-hidden">
+                {currentUser?.avatarUrl ? <img src={currentUser.avatarUrl} alt="" className="w-full h-full object-cover" /> : (currentUser?.name ? currentUser.name.charAt(0) : 'A')}
               </div>
               <span className={`absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full border-2 border-[#121317] ${
                 STATUS_OPTIONS.find(s => s.id === userStatus)?.color || 'bg-emerald-500'
@@ -200,6 +287,18 @@ export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSetting
           >
             <Palette className="h-4 w-4" />
             <span>{getTranslation(userLanguage, 'themeTab')} ({userTheme})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('security')}
+            className={`flex items-center space-x-2 rtl:space-x-reverse px-4 py-2.5 font-bold text-xs rounded-t-xl transition cursor-pointer border-b-2 ${
+              activeTab === 'security'
+                ? 'bg-[#1A1D21] text-blue-400 border-blue-500'
+                : 'text-gray-400 hover:text-gray-200 border-transparent hover:bg-gray-800/50'
+            }`}
+          >
+            <KeyRound className="h-4 w-4" />
+            <span>{isArabic ? 'الأمان' : 'Security'}</span>
           </button>
 
           <button
@@ -276,8 +375,8 @@ export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSetting
                 </h4>
                 <p className="text-xs text-gray-400 mt-1">
                   {isArabic 
-                    ? 'اختر مظهر سلاك الأصلي. تتكيف السمات مع ألوان شريط الأدوات الجانبي، والخلفية، وتفاصيل العناصر النشطة.'
-                    : 'Select your preferred Slack theme preset. Themes adapt sidebar colors, main workspace canvas, and active item highlights.'
+                    ? 'اختر مظهر DeskFlow الأصلي. تتكيف السمات مع ألوان شريط الأدوات الجانبي، والخلفية، وتفاصيل العناصر النشطة.'
+                    : 'Select your preferred DeskFlow theme preset. Themes adapt sidebar colors, main workspace canvas, and active item highlights.'
                   }
                 </p>
               </div>
@@ -346,6 +445,35 @@ export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSetting
                 </p>
               </div>
 
+              {/* Profile picture and title */}
+              <div className="bg-[#14161B] p-4 rounded-xl border border-gray-800 space-y-4">
+                <div className="flex items-center gap-4">
+                  <div className="w-16 h-16 rounded-2xl bg-[#4CAF50] text-[#121317] font-black flex items-center justify-center text-2xl shadow overflow-hidden shrink-0">
+                    {profileAvatarUrl ? <img src={profileAvatarUrl} alt="Profile preview" className="w-full h-full object-cover" /> : (currentUser?.name ? currentUser.name.charAt(0) : 'A')}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <input ref={profileImageInputRef} type="file" accept="image/*" onChange={handleProfileImageChange} className="hidden" />
+                    <button type="button" onClick={() => profileImageInputRef.current?.click()} className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold">{isArabic ? 'تحميل صورة' : 'Upload picture'}</button>
+                    {profileAvatarUrl && <button type="button" onClick={() => setProfileAvatarUrl('')} className="px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-semibold">{isArabic ? 'إزالة' : 'Remove'}</button>}
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="block text-xs text-gray-400">{isArabic ? 'الاسم الكامل' : 'Full name'}
+                    <input value={profileName} onChange={event => setProfileName(event.target.value)} placeholder={isArabic ? 'أدخل اسمك الكامل' : 'Enter your full name'} autoComplete="name" className="mt-1 w-full bg-[#1A1D21] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
+                  </label>
+                  <label className="block text-xs text-gray-400">{isArabic ? 'البريد الإلكتروني' : 'Email address'}
+                    <input type="email" value={profileEmail} onChange={event => setProfileEmail(event.target.value)} placeholder="you@example.com" autoComplete="email" className="mt-1 w-full bg-[#1A1D21] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
+                  </label>
+                  <label className="block text-xs text-gray-400">{isArabic ? 'رقم الهاتف' : 'Phone number'}
+                    <input type="tel" value={profilePhone} onChange={event => setProfilePhone(event.target.value)} placeholder={isArabic ? 'اختياري' : 'Optional'} autoComplete="tel" className="mt-1 w-full bg-[#1A1D21] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
+                  </label>
+                  <label className="block text-xs text-gray-400">{isArabic ? 'المسمى الوظيفي' : 'Job title'}
+                    <input value={profileTitle} onChange={event => setProfileTitle(event.target.value)} placeholder={isArabic ? 'مثال: محاسب، مسؤول مشتريات إعلامية' : 'e.g. Accountant, Media Buyer'} className="mt-1 w-full bg-[#1A1D21] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
+                  </label>
+                </div>
+                <div className="flex justify-end"><button type="button" onClick={handleSaveProfile} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">{isArabic ? 'حفظ الملف الشخصي' : 'Save profile'}</button></div>
+              </div>
+
               {/* Status Radio Options */}
               <div className="grid grid-cols-2 gap-2.5">
                 {STATUS_OPTIONS.map((st) => {
@@ -389,14 +517,49 @@ export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSetting
                     <span className="text-white font-medium font-mono">{currentUser?.email || 'abdallah@democompany.com'}</span>
                   </div>
                   <div>
+                    <span className="text-gray-500 block">{isArabic ? 'رقم الهاتف' : 'Phone number'}</span>
+                    <span className="text-white font-medium">{currentUser?.phone || (isArabic ? 'غير مضاف' : 'Not provided')}</span>
+                  </div>
+                  <div>
                     <span className="text-gray-500 block">{isArabic ? 'الدور والصفة' : 'Role & Designation'}</span>
-                    <span className="text-white font-medium">{currentUser?.role} ({currentUser?.title || 'CEO'})</span>
+                    <span className="text-white font-medium">{currentUser?.role}{currentUser?.title ? ` (${currentUser.title})` : ''}</span>
                   </div>
                   <div>
                     <span className="text-gray-500 block">{isArabic ? 'اللغة الحالية' : 'Current Language'}</span>
                     <span className="text-blue-400 font-bold">{userLanguage}</span>
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: PASSWORD SECURITY */}
+          {activeTab === 'security' && (
+            <div className="space-y-4 max-w-xl">
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center space-x-2 rtl:space-x-reverse">
+                  <KeyRound className="h-4 w-4 text-blue-400" />
+                  <span>{isArabic ? 'تغيير كلمة المرور' : 'Change your password'}</span>
+                </h4>
+                <p className="text-xs text-gray-400 mt-1">{isArabic ? 'استخدم كلمة مرور لا تقل عن 8 أحرف.' : 'Use a password with at least 8 characters.'}</p>
+              </div>
+              {passwordError && (
+                <div className="flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span>{passwordError}</span>
+                </div>
+              )}
+              <div className="bg-[#14161B] p-4 rounded-xl border border-gray-800 space-y-3">
+                <label className="block text-xs text-gray-400">{isArabic ? 'كلمة المرور الحالية' : 'Current password'}
+                  <input type="password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} autoComplete="current-password" className="mt-1 w-full bg-[#1A1D21] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
+                </label>
+                <label className="block text-xs text-gray-400">{isArabic ? 'كلمة المرور الجديدة' : 'New password'}
+                  <input type="password" value={newPassword} onChange={event => setNewPassword(event.target.value)} autoComplete="new-password" className="mt-1 w-full bg-[#1A1D21] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
+                </label>
+                <label className="block text-xs text-gray-400">{isArabic ? 'تأكيد كلمة المرور الجديدة' : 'Confirm new password'}
+                  <input type="password" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" className="mt-1 w-full bg-[#1A1D21] border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
+                </label>
+                <div className="flex justify-end"><button type="button" onClick={handleChangePassword} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold">{isArabic ? 'تغيير كلمة المرور' : 'Change password'}</button></div>
               </div>
             </div>
           )}

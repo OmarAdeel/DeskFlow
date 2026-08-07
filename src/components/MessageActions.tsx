@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Check, SmilePlus, MessageSquare, Forward, Bookmark, MoreVertical, Link as LinkIcon, X, Search, CheckCircle2 } from 'lucide-react';
 import { useWorkspace } from '../context';
 import { EmojiDeluxe } from './EmojiDeluxe';
+import { UserAvatar } from './UserAvatar';
 
 interface MessageActionsProps {
   itemId: string;
@@ -16,15 +17,15 @@ export function MessageActions({ itemId, onReply }: MessageActionsProps) {
   const [showToast, setShowToast] = useState('');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showForwardModal, setShowForwardModal] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [forwardSearch, setForwardSearch] = useState('');
   const [forwardedUserIds, setForwardedUserIds] = useState<string[]>([]);
 
   const toggleSaved = () => {
-    if (isSaved) {
-      setSavedItems(savedItems.filter(id => id !== itemId));
-    } else {
-      setSavedItems([...savedItems, itemId]);
-    }
+    setSavedItems(previousItems => previousItems.includes(itemId)
+      ? previousItems.filter(id => id !== itemId)
+      : [...previousItems, itemId]
+    );
   };
 
   const getChannelIdAndMessageText = () => {
@@ -44,12 +45,21 @@ export function MessageActions({ itemId, onReply }: MessageActionsProps) {
 
   const copyLink = () => {
     const { channelId } = getChannelIdAndMessageText();
-    const shareUrl = `${window.location.origin}${window.location.pathname}?view=channel&channelId=${channelId}&messageId=${itemId}`;
-    
-    // Copy to clipboard
+    const parentMessage = messages.find(message => message.id === itemId || message.replies.some(reply => reply.id === itemId));
+    const shareParams = new URLSearchParams({
+      view: 'channel',
+      channelId,
+      messageId: parentMessage?.id || itemId
+    });
+    if (parentMessage && parentMessage.id !== itemId) {
+      shareParams.set('replyId', itemId);
+    }
+    const shareUrl = `${window.location.origin}${window.location.pathname}?${shareParams.toString()}`;
+
     navigator.clipboard.writeText(shareUrl)
       .then(() => {
-        setShowToast('URL of this conversation copied to clipboard!');
+        setShowMoreMenu(false);
+        setShowToast(parentMessage && parentMessage.id !== itemId ? 'Link to this comment copied!' : 'Link to this thread copied!');
         setTimeout(() => setShowToast(''), 3000);
       })
       .catch((err) => {
@@ -114,7 +124,8 @@ export function MessageActions({ itemId, onReply }: MessageActionsProps) {
       const newChan = {
         id: newChanId,
         name: `${firstWord}-communication-channel`,
-        isPrivate: true
+        isPrivate: true,
+        memberIds: Array.from(new Set([currentUser?.id || '8', user.id]))
       };
       setChannels([...channels, newChan]);
       targetChanId = newChanId;
@@ -189,11 +200,20 @@ export function MessageActions({ itemId, onReply }: MessageActionsProps) {
 
          {onReply && <button onClick={onReply} id={`view-thread-btn-${itemId}`} title="View Thread" className="p-1.5 hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors bg-[#1A1D21]"><MessageSquare className="h-4 w-4" /></button>}
          <button onClick={() => { setShowForwardModal(true); setForwardedUserIds([]); setForwardSearch(''); }} title="Forward message" className="p-1.5 hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors bg-[#1A1D21]"><Forward className="h-4 w-4" /></button>
-         <button onClick={copyLink} title="Copy link" className="p-1.5 hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors bg-[#1A1D21]"><LinkIcon className="h-4 w-4" /></button>
          <button onClick={toggleSaved} title={isSaved ? "Remove from later" : "Save for later"} className={`p-1.5 hover:bg-gray-700 ${isSaved ? 'text-blue-500' : 'text-gray-400'} hover:text-blue-400 transition-colors bg-[#1A1D21]`}>
            <Bookmark className="h-4 w-4" />
          </button>
-         <button title="More actions" className="p-1.5 hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors bg-[#1A1D21] rounded-r"><MoreVertical className="h-4 w-4" /></button>
+         <div className="relative">
+           <button onClick={() => setShowMoreMenu(previous => !previous)} title="More actions" aria-label="More actions" aria-expanded={showMoreMenu} className="p-1.5 hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors bg-[#1A1D21] rounded-r"><MoreVertical className="h-4 w-4" /></button>
+           {showMoreMenu && (
+             <div className="absolute right-0 top-full mt-1 w-44 bg-[#121317] border border-gray-700 rounded-lg shadow-2xl py-1 z-[1000]">
+               <button onClick={copyLink} className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-gray-300 hover:text-white hover:bg-gray-800 transition-colors">
+                 <LinkIcon className="h-3.5 w-3.5 text-blue-400" />
+                 <span>Copy link</span>
+               </button>
+             </div>
+           )}
+         </div>
       </div>
 
       {/* Forward Message Modal Popup */}
@@ -244,10 +264,10 @@ export function MessageActions({ itemId, onReply }: MessageActionsProps) {
                       <div className="flex items-center space-x-3 min-w-0">
                         {/* User Avatar */}
                         <div className="w-9 h-9 rounded-lg overflow-hidden shrink-0 bg-gray-700 border border-gray-600 flex items-center justify-center relative">
-                          <img 
-                            src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name}&backgroundColor=b6e3f4`} 
-                            alt={user.name} 
-                            className="w-full h-full object-cover" 
+                          <UserAvatar
+                            user={user}
+                            alt={user.name}
+                            className="w-full h-full object-cover"
                           />
                         </div>
                         {/* User Metadata */}

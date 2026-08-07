@@ -6,8 +6,9 @@ import {
   Info, Circle, Play, Pause, Download, Share2, FileText, CornerUpRight, Hand, MessageSquare, 
   Grid, Layout, Smile, Wand2, ShieldCheck, Flame, Zap, Minimize2, Copy, LogOut
 } from 'lucide-react';
-import { useWorkspace, RecordedHuddle } from '../../context';
+import { canAccessChannel, useWorkspace, RecordedHuddle } from '../../context';
 import { getTranslation } from '../../utils/i18n';
+import { UserAvatar } from '../UserAvatar';
 import '@tensorflow/tfjs-core';
 import '@tensorflow/tfjs-backend-webgl';
 import '@tensorflow/tfjs-converter';
@@ -19,9 +20,10 @@ export function HuddlesView() {
     activeHuddle, startGlobalHuddle, endGlobalHuddle,
     toggleHuddleMic, toggleHuddleVideo, toggleHuddleScreenShare, toggleHuddleRecording, toggleHuddleHand,
     setHuddleNotes, setLayoutMode, setShowNotesDrawer, setMicLevel,
-    savedRecordings, setSavedRecordings, setHuddleMinimized, huddleLogs
+    savedRecordings, setSavedRecordings, setHuddleMinimized, huddleLogs, activeOrganizationId
   } = useWorkspace();
   const isArabic = userLanguage.includes('Arabic') || userLanguage.includes('العربية');
+  const visibleChannels = channels.filter(channel => canAccessChannel(channel, currentUser, activeOrganizationId));
 
   // Destructure activeHuddle for ease of use
   const { 
@@ -172,7 +174,7 @@ export function HuddlesView() {
   const microphoneStreamRef = useRef<MediaStream | null>(null);
   const audioIntervalRef = useRef<number | null>(null);
 
-  // New Huddle Device Selectors & Controls (matching Slack/Meet control bar)
+  // New Huddle Device Selectors & Controls (matching DeskFlow/Meet control bar)
   const [selectedMicrophone, setSelectedMicrophone] = useState<string>('MacBook Pro Microphone (Built-in)');
   const [selectedSpeaker, setSelectedSpeaker] = useState<string>('MacBook Pro Speakers (Built-in)');
   const [showMicDropdown, setShowMicDropdown] = useState(false);
@@ -576,7 +578,7 @@ export function HuddlesView() {
             <div>
               <h2 className="text-lg sm:text-xl font-bold text-gray-100">{getTranslation(userLanguage, 'huddles')}</h2>
               <p className="text-[11px] sm:text-xs text-gray-400 line-clamp-1">
-                {isArabic ? 'اجتماعات الصوت والفيديو السريعة بمزايا Slack و Google Meet' : 'Slack & Google Meet powered audio & video workspace calls'}
+                {isArabic ? 'اجتماعات الصوت والفيديو السريعة بمزايا DeskFlow و Google Meet' : 'DeskFlow & Google Meet powered audio & video workspace calls'}
               </p>
             </div>
           </div>
@@ -860,17 +862,16 @@ export function HuddlesView() {
 
                           <div className="flex items-center gap-4" onClick={(e) => e.stopPropagation()}>
                             <div className="flex -space-x-1.5 rtl:space-x-reverse">
-                              <img 
-                                className="w-7 h-7 rounded-full border border-gray-900 object-cover bg-gray-800" 
-                                src="https://api.dicebear.com/7.x/avataaars/svg?seed=Abdallah" 
-                                alt="Me" 
-                                referrerPolicy="no-referrer"
+                              <UserAvatar
+                                user={currentUser}
+                                fallbackName="Abdallah"
+                                className="w-7 h-7 rounded-full border border-gray-900 object-cover bg-gray-800"
+                                alt="Me"
                               />
-                              <img 
-                                className="w-7 h-7 rounded-full border border-gray-900 object-cover bg-gray-800" 
-                                src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name.replace(/\s+/g, '')}`} 
-                                alt={user.name} 
-                                referrerPolicy="no-referrer"
+                              <UserAvatar
+                                user={user}
+                                className="w-7 h-7 rounded-full border border-gray-900 object-cover bg-gray-800"
+                                alt={user.name}
                               />
                             </div>
                             <button 
@@ -928,7 +929,7 @@ export function HuddlesView() {
                     <div className="bg-[#1A1D21] p-3 rounded-xl border border-gray-800 text-xs text-gray-300">
                       <div className="flex items-center space-x-1.5 rtl:space-x-reverse text-purple-400 font-bold mb-1">
                         <Wand2 className="h-3.5 w-3.5" />
-                        <span>{isArabic ? 'ملخص Slack AI:' : 'Slack AI Summary:'}</span>
+                        <span>{isArabic ? 'ملخص DeskFlow AI:' : 'DeskFlow AI Summary:'}</span>
                       </div>
                       <p className="text-gray-300">{rec.summary}</p>
                     </div>
@@ -1116,11 +1117,10 @@ export function HuddlesView() {
                         }`}
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          <img 
-                            className="w-10 h-10 rounded-full object-cover bg-gray-800 shrink-0 border border-gray-700" 
-                            src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name.replace(/\s+/g, '')}`} 
-                            alt={user.name} 
-                            referrerPolicy="no-referrer"
+                          <UserAvatar
+                            user={user}
+                            className="w-10 h-10 rounded-full object-cover bg-gray-800 shrink-0 border border-gray-700"
+                            alt={user.name}
                           />
                           <div className="min-w-0">
                             <div className="font-semibold text-sm truncate text-gray-100">{user.name}</div>
@@ -1131,7 +1131,7 @@ export function HuddlesView() {
                     );
                   })
                 ) : (
-                  channels.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase())).map(channel => {
+                  visibleChannels.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase())).map(channel => {
                     const isSelected = selectedId === channel.id && selectedType === 'channel';
                     const ChannelIcon = channel.isPrivate ? Lock : Hash;
                     return (

@@ -1,4 +1,5 @@
-import { Search, Clock, HelpCircle, ArrowLeft, ArrowRight, Globe, Menu } from 'lucide-react';
+import { Search, Clock, HelpCircle, ArrowLeft, ArrowRight, Globe, Menu, ChevronDown, LogOut, UserCircle } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { useWorkspace } from '../context';
 import { getTranslation } from '../utils/i18n';
 
@@ -7,8 +8,20 @@ interface TopNavProps {
 }
 
 export function TopNav({ onOpenMobileMenu }: TopNavProps) {
-  const { setIsProfileModalOpen, userLanguage, currentUser } = useWorkspace();
+  const { setIsProfileModalOpen, userLanguage, currentUser, logout } = useWorkspace();
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
   const isArabic = userLanguage.includes('Arabic') || userLanguage.includes('العربية');
+
+  useEffect(() => {
+    const closeAccountMenu = (event: PointerEvent) => {
+      if (!accountMenuRef.current?.contains(event.target as Node)) {
+        setIsAccountMenuOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', closeAccountMenu);
+    return () => document.removeEventListener('pointerdown', closeAccountMenu);
+  }, []);
 
   return (
     <div className="h-12 border-b border-gray-800/50 bg-[#121317] flex items-center justify-between px-2.5 md:px-4 sticky top-0 z-20 w-full shrink-0">
@@ -70,14 +83,54 @@ export function TopNav({ onOpenMobileMenu }: TopNavProps) {
           <HelpCircle className="h-[18px] w-[18px]" />
         </button>
 
-        {/* User Avatar */}
-        <button
-          onClick={() => setIsProfileModalOpen(true)}
-          className="w-7 h-7 rounded-lg bg-[#4CAF50] text-[#121317] font-extrabold text-xs flex items-center justify-center cursor-pointer hover:brightness-110 shadow-sm border border-gray-800 transition transform hover:scale-105"
-          title={isArabic ? "الملف الشخصي والتفضيلات" : "My Profile & Preferences"}
-        >
-          {currentUser?.name ? currentUser.name.charAt(0) : 'A'}
-        </button>
+        {/* User account menu */}
+        <div ref={accountMenuRef} className="relative">
+          <button
+            onClick={() => setIsAccountMenuOpen(previous => !previous)}
+            aria-haspopup="menu"
+            aria-expanded={isAccountMenuOpen}
+            className="flex items-center gap-1 rounded-lg p-0.5 text-gray-300 hover:bg-gray-800 transition cursor-pointer"
+            title={isArabic ? "حسابي" : "My account"}
+          >
+            <span className="w-7 h-7 rounded-lg bg-[#4CAF50] text-[#121317] font-extrabold text-xs flex items-center justify-center shadow-sm border border-gray-800 overflow-hidden">
+              {currentUser?.avatarUrl ? <img src={currentUser.avatarUrl} alt="Profile" className="w-full h-full object-cover" /> : (currentUser?.name ? currentUser.name.charAt(0) : 'A')}
+            </span>
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isAccountMenuOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {isAccountMenuOpen && (
+            <div role="menu" className="absolute right-0 top-full mt-2 w-64 rounded-xl border border-gray-700 bg-[#121317] shadow-2xl z-50 overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-800">
+                <p className="text-sm font-bold text-gray-100 truncate">{currentUser?.name || 'Workspace user'}</p>
+                <p className="text-[11px] text-gray-500 truncate">{currentUser?.email || 'Local workspace account'}</p>
+              </div>
+              <div className="p-1.5">
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setIsProfileModalOpen(true);
+                    setIsAccountMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-xs text-gray-300 hover:bg-gray-800 hover:text-white transition cursor-pointer"
+                >
+                  <UserCircle className="h-4 w-4 text-blue-400" />
+                  <span>{isArabic ? 'الملف الشخصي والتفضيلات' : 'Profile & preferences'}</span>
+                </button>
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setIsAccountMenuOpen(false);
+                    logout();
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left text-xs text-red-300 hover:bg-red-500/10 hover:text-red-200 transition cursor-pointer"
+                >
+                  <LogOut className="h-4 w-4" />
+                  <span>{isArabic ? 'تسجيل الخروج' : 'Log out'}</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

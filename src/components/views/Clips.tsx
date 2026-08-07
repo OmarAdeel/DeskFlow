@@ -20,8 +20,8 @@ export function ClipsView() {
       date: '2 hours ago',
       views: 18,
       transcript: isArabic 
-        ? 'مرحباً بالفريق، هذا تسجيل سريع يستعرض تطبيق ألوان سلاك الرسمية مع دعم اتجاه RTL الكامل باللغة العربية.'
-        : 'Hey team, quick video walk-through demonstrating Slack official themes and full Arabic RTL layout support.'
+        ? 'مرحباً بالفريق، هذا تسجيل سريع يستعرض تطبيق ألوان DeskFlow الرسمية مع دعم اتجاه RTL الكامل باللغة العربية.'
+        : 'Hey team, quick video walk-through demonstrating DeskFlow official themes and full Arabic RTL layout support.'
     },
     {
       id: 'clip-2',
@@ -136,7 +136,7 @@ export function ClipsView() {
                 <div className="bg-gray-900/60 p-3 rounded-lg border border-gray-800 text-xs text-gray-300">
                   <div className="flex items-center space-x-1.5 rtl:space-x-reverse text-amber-400 font-bold text-[11px] mb-1">
                     <Sparkles className="h-3.5 w-3.5" />
-                    <span>{isArabic ? 'التفريغ النصي التلقائي (AI Transcript):' : 'Slack AI Auto-Transcript:'}</span>
+                    <span>{isArabic ? 'التفريغ النصي التلقائي (AI Transcript):' : 'DeskFlow AI Auto-Transcript:'}</span>
                   </div>
                   <p className="italic text-gray-400">"{clip.transcript}"</p>
                 </div>

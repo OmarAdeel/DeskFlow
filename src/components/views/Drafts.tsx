@@ -1,9 +1,9 @@
 import React from 'react';
-import { useWorkspace } from '../../context';
+import { canAccessChannel, useWorkspace } from '../../context';
 import { FileEdit, Hash, Lock } from 'lucide-react';
 
 export function DraftsView({ onNavigate }: { onNavigate: any }) {
-  const { drafts, channels, users } = useWorkspace();
+  const { drafts, channels, users, currentUser, activeOrganizationId } = useWorkspace();
 
   return (
     <div className="flex flex-col h-full bg-[#1A1D21] text-gray-300">
@@ -23,6 +23,7 @@ export function DraftsView({ onNavigate }: { onNavigate: any }) {
           <div className="space-y-4 max-w-3xl">
             {drafts.map((draft, idx) => {
               const channel = channels.find(c => c.id === draft.channelId);
+              if (channel && !canAccessChannel(channel, currentUser, activeOrganizationId)) return null;
               return (
                 <div 
                   key={idx} 

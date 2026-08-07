@@ -22,7 +22,7 @@ export function AppsView() {
       id: 'app-gdrive',
       name: 'Google Drive & Workspace',
       category: 'File Management & Docs',
-      desc: isArabic ? 'مشاركة مستندات Google ورسائل تنبيه التعليقات مباشرة في Slack' : 'Share Google Docs, Sheets, and get direct comment notifications.',
+      desc: isArabic ? 'مشاركة مستندات Google ورسائل تنبيه التعليقات مباشرة في DeskFlow' : 'Share Google Docs, Sheets, and get direct comment notifications.',
       iconBg: 'bg-blue-600',
       installed: true,
       rating: 4.9
@@ -40,7 +40,7 @@ export function AppsView() {
       id: 'app-jira',
       name: 'Jira Cloud',
       category: 'Project Management',
-      desc: isArabic ? 'إنشاء ومتابعة تذاكر المهام وتحديث حالة المشروعات' : 'Create, track, and manage Jira issues right from Slack DMs.',
+      desc: isArabic ? 'إنشاء ومتابعة تذاكر المهام وتحديث حالة المشروعات' : 'Create, track, and manage Jira issues right from DeskFlow DMs.',
       iconBg: 'bg-blue-700',
       installed: false,
       rating: 4.7
@@ -58,7 +58,7 @@ export function AppsView() {
       id: 'app-zapier',
       name: 'Zapier Webhooks',
       category: 'Workflow Automation',
-      desc: isArabic ? 'ربط سلاك بأكثر من 5,000 تطبيق ويب وأتمتة المهام تلقائياً' : 'Connect Slack with 5,000+ apps and automate cross-platform triggers.',
+      desc: isArabic ? 'ربط DeskFlow بأكثر من 5,000 تطبيق ويب وأتمتة المهام تلقائياً' : 'Connect DeskFlow with 5,000+ apps and automate cross-platform triggers.',
       iconBg: 'bg-orange-600',
       installed: false,
       rating: 4.8
@@ -67,7 +67,7 @@ export function AppsView() {
       id: 'app-figma',
       name: 'Figma Design',
       category: 'Design & Collaboration',
-      desc: isArabic ? 'تلقي تعليقات وملفات التصميم مباشرة في قنوات الفريق' : 'Live design updates and comment threads sent directly to Slack channels.',
+      desc: isArabic ? 'تلقي تعليقات وملفات التصميم مباشرة في قنوات الفريق' : 'Live design updates and comment threads sent directly to DeskFlow channels.',
       iconBg: 'bg-purple-600',
       installed: false,
       rating: 4.8
@@ -95,8 +95,8 @@ export function AppsView() {
             </div>
             <p className="text-xs text-gray-400 mt-1">
               {isArabic
-                ? 'ربط أدوات وتطبيقات العمل الخارجية لمساحة عمل سلاك لتوليد التنبيهات والأتمتة التلقائية.'
-                : 'Connect external tools, GitHub, Google Drive, and Zoom to your Slack workspace.'
+                ? 'ربط أدوات وتطبيقات العمل الخارجية لمساحة عمل DeskFlow لتوليد التنبيهات والأتمتة التلقائية.'
+                : 'Connect external tools, GitHub, Google Drive, and Zoom to your DeskFlow workspace.'
               }
             </p>
           </div>
@@ -153,7 +153,7 @@ export function AppsView() {
                   ) : (
                     <>
                       <Plus className="h-3.5 w-3.5" />
-                      <span>{isArabic ? 'تثبيت التطبيق' : 'Add to Slack'}</span>
+                      <span>{isArabic ? 'تثبيت التطبيق' : 'Add to DeskFlow'}</span>
                     </>
                   )}
                 </button>

@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { AlignLeft, Hash, Lock, Bell, Rocket, Sparkles, CheckCircle2, Circle, ArrowUp, Zap, Check, RotateCcw, AlertCircle, MessageSquare, User, CheckSquare } from 'lucide-react';
-import { useWorkspace } from '../../context';
+import { canAccessChannel, useWorkspace } from '../../context';
 import { FormattedMessage } from '../FormattedMessage';
+import { UserAvatar } from '../UserAvatar';
 
 export function UnreadsView({ onNavigate }: { onNavigate?: any }) {
-  const { messages, setMessages, channels, users } = useWorkspace();
+  const { messages, setMessages, channels, users, currentUser, activeOrganizationId } = useWorkspace();
 
   // 1. Channel unreads from workspace context
   const unreadMessages = messages.filter(m => !m.isRead);
@@ -375,7 +376,7 @@ export function UnreadsView({ onNavigate }: { onNavigate?: any }) {
                   <div className="space-y-4">
                     {(Object.entries(groupedByChannel) as [string, any[]][]).map(([channelId, channelMsgs]) => {
                       const channel = channels.find(c => c.id === channelId);
-                      if (!channel) return null;
+                      if (!channel || !canAccessChannel(channel, currentUser, activeOrganizationId)) return null;
 
                       return (
                         <div key={channelId} className="space-y-2">
@@ -402,7 +403,7 @@ export function UnreadsView({ onNavigate }: { onNavigate?: any }) {
                                   <div>
                                     <div className="flex items-center gap-2 mb-1.5">
                                       <div className="w-5 h-5 rounded-full overflow-hidden bg-gray-800 border border-gray-700">
-                                        <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${sender?.name}&backgroundColor=b6e3f4`} alt="" className="w-full h-full" />
+                                        <UserAvatar user={sender} className="w-full h-full object-cover" alt={sender?.name || 'User'} />
                                       </div>
                                       <span className="font-bold text-gray-200 text-xs">{sender?.name}</span>
                                       <span className="text-[9px] text-gray-550">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>

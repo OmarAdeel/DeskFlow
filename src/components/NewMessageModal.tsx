@@ -3,7 +3,7 @@ import {
   Search, X, Hash, Lock, User, Send, MessageSquare, Check, Sparkles,
   Smile, Paperclip, Bold, Italic, Code, AtSign, ArrowRight, Pin
 } from 'lucide-react';
-import { useWorkspace, Channel, WorkspaceUser } from '../context';
+import { canAccessChannel, useWorkspace, Channel, WorkspaceUser } from '../context';
 import { ViewType } from '../types';
 
 interface NewMessageModalProps {
@@ -13,7 +13,7 @@ interface NewMessageModalProps {
 }
 
 export function NewMessageModal({ isOpen, onClose, onNavigate }: NewMessageModalProps) {
-  const { channels, users, currentUser, messages, setMessages } = useWorkspace();
+  const { channels, users, currentUser, messages, setMessages, activeOrganizationId } = useWorkspace();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTarget, setSelectedTarget] = useState<{ type: 'channel' | 'user'; data: Channel | WorkspaceUser } | null>(null);
   const [messageText, setMessageText] = useState('');
@@ -81,16 +81,17 @@ export function NewMessageModal({ isOpen, onClose, onNavigate }: NewMessageModal
     );
   };
 
-  const filteredChannels = channels.filter(c => 
+  const visibleChannels = channels.filter(channel => canAccessChannel(channel, currentUser, activeOrganizationId));
+  const filteredChannels = visibleChannels.filter(c =>
     c.name.toLowerCase().includes(searchQuery.toLowerCase().trim())
   );
 
-  const filteredUsers = users.filter(u => 
+  const filteredUsers = users.filter(u => u.id !== currentUser?.id && (!activeOrganizationId || u.organizationIds?.includes(activeOrganizationId)) && (
     u.name.toLowerCase().includes(searchQuery.toLowerCase().trim()) ||
     u.email.toLowerCase().includes(searchQuery.toLowerCase().trim()) ||
     (u.title && u.title.toLowerCase().includes(searchQuery.toLowerCase().trim())) ||
     (u.username && u.username.toLowerCase().includes(searchQuery.toLowerCase().trim()))
-  );
+  ));
 
   const pinnedUsersList = filteredUsers.filter(u => pinnedUserIds.includes(u.id));
   const pinnedChannelsList = filteredChannels.filter(c => pinnedChannelIds.includes(c.id));
@@ -128,10 +129,10 @@ export function NewMessageModal({ isOpen, onClose, onNavigate }: NewMessageModal
     } else {
       const user = selectedTarget.data as WorkspaceUser;
       if (messageText.trim()) {
-        const event = new CustomEvent('send-dm-message', {
-          detail: { userId: user.id, text: messageText.trim() }
-        });
-        window.dispatchEvent(event);
+        const pendingMessage = { userId: user.id, text: messageText.trim(), createdAt: Date.now() };
+        // Keep the compose handoff available when navigation mounts DMs after this event fires.
+        localStorage.setItem('workspace_pending_dm', JSON.stringify(pendingMessage));
+        window.dispatchEvent(new CustomEvent('send-dm-message', { detail: pendingMessage }));
       }
       onNavigate('dms', user.id);
     }

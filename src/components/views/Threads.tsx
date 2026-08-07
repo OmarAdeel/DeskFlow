@@ -1,10 +1,11 @@
 import React, { useState, useRef } from 'react';
-import { useWorkspace, Message, Reply } from '../../context';
+import { canAccessChannel, useWorkspace, Message, Reply } from '../../context';
 import { MessageSquare, Hash, Lock, Bold, Italic, Underline, Strikethrough, Link as LinkIcon, ListOrdered, List, AlignLeft, Code, SquareSlash, Plus, Type, Smile, AtSign, MoreHorizontal, Send, ChevronDown, X } from 'lucide-react';
 import { MessageActions } from '../MessageActions';
 import { MessageReactions } from '../MessageReactions';
 import { FormattedMessage } from '../FormattedMessage';
 import { EmojiDeluxe } from '../EmojiDeluxe';
+import { UserAvatar } from '../UserAvatar';
 
 const ThreadItem: React.FC<{ msg: Message, onNavigate: any, onSelectThread: (id: string) => void }> = ({ msg, onNavigate, onSelectThread }) => {
   const { users, channels, setMessages, messages, currentUser, drafts, setDrafts } = useWorkspace();
@@ -113,7 +114,7 @@ const ThreadItem: React.FC<{ msg: Message, onNavigate: any, onSelectThread: (id:
         <div className="relative group">
           <div className="flex">
             <div className="h-8 w-8 bg-gray-700 rounded mr-3 shrink-0 overflow-hidden">
-              <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${sender?.name}&backgroundColor=b6e3f4`} alt="" />
+              <UserAvatar user={sender} className="h-full w-full object-cover" alt={sender?.name || 'User'} />
             </div>
             <div>
               <div className="flex items-baseline mb-0.5">
@@ -151,7 +152,7 @@ const ThreadItem: React.FC<{ msg: Message, onNavigate: any, onSelectThread: (id:
               <div key={idx} className="relative group">
                 <div className="flex relative z-10">
                   <div className="h-6 w-6 bg-gray-700 rounded mr-3 shrink-0 overflow-hidden mt-1">
-                    <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${replier?.name}&backgroundColor=b6e3f4`} alt="" />
+                    <UserAvatar user={replier} className="h-full w-full object-cover" alt={replier?.name || 'User'} />
                   </div>
                   <div>
                     <div className="flex items-baseline mb-0.5">
@@ -262,7 +263,7 @@ const ThreadItem: React.FC<{ msg: Message, onNavigate: any, onSelectThread: (id:
 };
 
 export function ThreadsView({ onNavigate }: { onNavigate: any }) {
-  const { messages, currentUser, users, channels, setMessages, drafts, setDrafts } = useWorkspace();
+  const { messages, currentUser, users, channels, setMessages, drafts, setDrafts, activeOrganizationId } = useWorkspace();
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [threadReply, setThreadReply] = useState('');
   const [visibleRepliesCount, setVisibleRepliesCount] = useState<number>(5);
@@ -282,9 +283,17 @@ export function ThreadsView({ onNavigate }: { onNavigate: any }) {
   if (!currentUser) return null;
 
   // Find threads where the current user replied or started the thread
-  const myThreads = messages.filter(m => m.replies.some(r => r.senderId === currentUser.id) || m.senderId === currentUser.id);
+  const myThreads = messages.filter(message => {
+    const channel = channels.find(candidate => candidate.id === message.channelId);
+    return Boolean(channel && canAccessChannel(channel, currentUser, activeOrganizationId)) &&
+      (message.replies.some(reply => reply.senderId === currentUser.id) || message.senderId === currentUser.id);
+  });
 
-  const activeThread = messages.find(m => m.id === activeThreadId);
+  const activeThread = messages.find(message => {
+    if (message.id !== activeThreadId) return false;
+    const channel = channels.find(candidate => candidate.id === message.channelId);
+    return Boolean(channel && canAccessChannel(channel, currentUser, activeOrganizationId));
+  });
   const activeThreadChannel = activeThread ? channels.find(c => c.id === activeThread.channelId) : null;
 
   const handleThreadTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -414,7 +423,7 @@ export function ThreadsView({ onNavigate }: { onNavigate: any }) {
             {/* Original Message */}
             <div className="relative group flex mb-6 border-b border-[#2A2B32]/30 pb-6 hover:bg-[#2A2B32]/30 p-2 -mx-2 rounded transition-colors">
               <div className="h-10 w-10 bg-gray-700 rounded mr-3 shrink-0 overflow-hidden">
-                <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${users.find(u => u.id === activeThread.senderId)?.name}&backgroundColor=b6e3f4`} alt="" />
+                <UserAvatar user={users.find(u => u.id === activeThread.senderId)} className="h-full w-full object-cover" alt="User" />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-baseline mb-1">
@@ -445,7 +454,7 @@ export function ThreadsView({ onNavigate }: { onNavigate: any }) {
               return (
                 <div key={reply.id} className="relative group flex hover:bg-[#2A2B32]/30 p-2 -mx-2 rounded transition-colors mt-2">
                   <div className="h-8 w-8 bg-gray-700 rounded mr-3 shrink-0 overflow-hidden">
-                    <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${replier?.name}&backgroundColor=b6e3f4`} alt="" />
+                    <UserAvatar user={replier} className="h-full w-full object-cover" alt={replier?.name || 'User'} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline mb-1">

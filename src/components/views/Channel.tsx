@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useWorkspace } from '../../context';
+import { canAccessChannel, useWorkspace } from '../../context';
 import { 
   Hash, Lock, Send, MessageSquare, X, Bold, Italic, Underline, Strikethrough, 
   Link as LinkIcon, ListOrdered, List, AlignLeft, Code, SquareSlash, Plus, 
@@ -11,7 +11,10 @@ import {
 import { MessageActions } from '../MessageActions';
 import { MessageReactions } from '../MessageReactions';
 import { FormattedMessage } from '../FormattedMessage';
+import { DisplayName } from '../DisplayName';
 import { EmojiDeluxe } from '../EmojiDeluxe';
+import { UserAvatar, getAvatarUrl } from '../UserAvatar';
+import { AgentConversationMessage, buildAgentWorkspaceContext, buildWorkspaceLink, containsAgentMention, requestAgentReply } from '../../utils/agentResponse';
 
 // Beautiful inline sub-component to play recorded voice notes
 function VoiceNotePlayer({ durationText }: { durationText: string }) {
@@ -128,14 +131,19 @@ function VideoMessagePlayer({ durationText }: { durationText: string }) {
 }
 
 export function ChannelView({ channelId, onNavigate }: { channelId: string, onNavigate: any }) {
-  const { channels, users, messages, setMessages, drafts, setDrafts, currentUser, activeHuddle, startGlobalHuddle, endGlobalHuddle, toggleHuddleMic } = useWorkspace();
+  const { channels, users, setChannels, setUsers, organizations, agents, messages, setMessages, drafts, setDrafts, currentUser, userStatus, activeHuddle, startGlobalHuddle, endGlobalHuddle, toggleHuddleMic, activeOrganizationId } = useWorkspace();
   const channel = channels.find(c => c.id === channelId);
   const draft = drafts.find(d => d.channelId === channelId);
   
   const [newMessage, setNewMessage] = useState(draft?.text || '');
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [highlightedThreadItemId, setHighlightedThreadItemId] = useState<string | null>(null);
   const [threadReply, setThreadReply] = useState('');
   const [visibleRepliesCount, setVisibleRepliesCount] = useState<number>(5);
+  const [agentStatus, setAgentStatus] = useState<{ name: string; status: 'searching' | 'thinking' | 'checking' | 'typing' } | null>(null);
+  const agentStatusTimerRef = useRef<number | null>(null);
+  const agentRequestControllerRef = useRef<AbortController | null>(null);
+  const agentRequestGenerationRef = useRef(0);
   
   const [activeTab, setActiveTab] = useState<'messages' | 'files' | 'links' | 'canvas'>('messages');
 
@@ -248,6 +256,10 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
   // Pixel-Perfect Refactored Header and Sidebar States
   const [showFormatting, setShowFormatting] = useState(true);
   const [showMembersDrawer, setShowMembersDrawer] = useState(false);
+  const [showAddMembers, setShowAddMembers] = useState(false);
+  const [memberSearchQuery, setMemberSearchQuery] = useState('');
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
+  const [memberUpdateMessage, setMemberUpdateMessage] = useState<string | null>(null);
   const isChannelHuddleActive = activeHuddle.inCall && activeHuddle.targetType === 'channel' && activeHuddle.targetId === channelId;
   const [showHuddleDropdown, setShowHuddleDropdown] = useState(false);
   const [showNotificationDropdown, setShowNotificationDropdown] = useState(false);
@@ -274,6 +286,10 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
   const [mentionQuery, setMentionQuery] = useState('');
   const [showThreadMentionsList, setShowThreadMentionsList] = useState(false);
   const [threadMentionQuery, setThreadMentionQuery] = useState('');
+  const [showChannelMentionsList, setShowChannelMentionsList] = useState(false);
+  const [channelMentionQuery, setChannelMentionQuery] = useState('');
+  const [showThreadChannelMentionsList, setShowThreadChannelMentionsList] = useState(false);
+  const [threadChannelMentionQuery, setThreadChannelMentionQuery] = useState('');
 
   // Huddle call controls (using global state now)
 
@@ -284,18 +300,28 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
     if (activeThreadId) {
       const threadDraft = drafts.find(d => d.threadId === activeThreadId);
       setThreadReply(threadDraft?.text || '');
+      const activeMessage = messages.find(message => message.id === activeThreadId);
+      const replyIndex = highlightedThreadItemId && activeMessage
+        ? activeMessage.replies.findIndex(reply => reply.id === highlightedThreadItemId)
+        : -1;
+      setVisibleRepliesCount(replyIndex >= 0
+        ? Math.max(5, activeMessage.replies.length - replyIndex)
+        : 5);
     } else {
       setThreadReply('');
+      setHighlightedThreadItemId(null);
+      setVisibleRepliesCount(5);
     }
-    setVisibleRepliesCount(5);
-  }, [activeThreadId]);
+  }, [activeThreadId, highlightedThreadItemId, messages]);
 
   React.useEffect(() => {
     const handleOpenThread = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail && detail.messageId) {
-        const mainMsg = messages.find(m => m.id === detail.messageId || m.replies.some(r => r.id === detail.messageId));
+        const targetId = detail.replyId || detail.messageId;
+        const mainMsg = messages.find(m => m.id === detail.messageId || m.id === targetId || m.replies.some(r => r.id === targetId));
         if (mainMsg && mainMsg.channelId === channelId) {
+          setHighlightedThreadItemId(targetId);
           setActiveThreadId(mainMsg.id);
         }
       }
@@ -309,13 +335,28 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const mId = params.get('messageId');
+    const replyId = params.get('replyId');
     if (mId) {
-      const mainMsg = messages.find(m => m.id === mId || m.replies.some(r => r.id === mId));
+      const targetId = replyId || mId;
+      const mainMsg = messages.find(m => m.id === mId || m.id === targetId || m.replies.some(r => r.id === targetId));
       if (mainMsg && mainMsg.channelId === channelId) {
+        setHighlightedThreadItemId(targetId);
         setActiveThreadId(mainMsg.id);
       }
     }
   }, [channelId, messages]);
+
+  React.useEffect(() => {
+    if (!highlightedThreadItemId || !activeThreadId) return;
+    const scrollTimer = window.setTimeout(() => {
+      document.getElementById(`thread-item-${highlightedThreadItemId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 120);
+    const clearHighlightTimer = window.setTimeout(() => setHighlightedThreadItemId(null), 3500);
+    return () => {
+      window.clearTimeout(scrollTimer);
+      window.clearTimeout(clearHighlightTimer);
+    };
+  }, [activeThreadId, highlightedThreadItemId, visibleRepliesCount]);
 
   // Audio Recorder Timer Effect
   React.useEffect(() => {
@@ -348,29 +389,58 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
   
   const channelInputRef = useRef<HTMLTextAreaElement>(null);
   const threadInputRef = useRef<HTMLTextAreaElement>(null);
+  const channelMessagesContainerRef = useRef<HTMLDivElement>(null);
+  const threadMessagesContainerRef = useRef<HTMLDivElement>(null);
+
+  const scrollToLatest = (containerRef: React.RefObject<HTMLDivElement>) => {
+    window.setTimeout(() => {
+      containerRef.current?.scrollTo({
+        top: containerRef.current.scrollHeight,
+        behavior: 'smooth'
+      });
+    }, 0);
+  };
   
   const handleThreadTextChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const text = e.target.value;
     setThreadReply(text);
     
-    // Check cursor position for autocomplete mention query
+    // Check cursor position for user or channel autocomplete.
     const selectionStart = e.target.selectionStart || 0;
     const textBeforeCursor = text.substring(0, selectionStart);
     const lastAtIndex = textBeforeCursor.lastIndexOf('@');
-    
-    if (lastAtIndex !== -1) {
-      const queryText = textBeforeCursor.substring(lastAtIndex + 1);
-      const isStartOfWord = lastAtIndex === 0 || /\s/.test(textBeforeCursor.charAt(lastAtIndex - 1));
+    const lastHashIndex = textBeforeCursor.lastIndexOf('#');
+    const isHashAfterAt = lastHashIndex > lastAtIndex;
+
+    if (isHashAfterAt && lastHashIndex !== -1) {
+      const queryText = textBeforeCursor.substring(lastHashIndex + 1);
+      const isStartOfWord = lastHashIndex === 0 || /\s/.test(textBeforeCursor.charAt(lastHashIndex - 1));
       if (!/\s/.test(queryText) && isStartOfWord) {
-        setShowThreadMentionsList(true);
-        setThreadMentionQuery(queryText);
+        setShowThreadChannelMentionsList(true);
+        setThreadChannelMentionQuery(queryText);
+        setShowThreadMentionsList(false);
+        setThreadMentionQuery('');
+      } else {
+        setShowThreadChannelMentionsList(false);
+        setThreadChannelMentionQuery('');
+      }
+    } else {
+      setShowThreadChannelMentionsList(false);
+      setThreadChannelMentionQuery('');
+      if (lastAtIndex !== -1) {
+        const queryText = textBeforeCursor.substring(lastAtIndex + 1);
+        const isStartOfWord = lastAtIndex === 0 || /\s/.test(textBeforeCursor.charAt(lastAtIndex - 1));
+        if (!/\s/.test(queryText) && isStartOfWord) {
+          setShowThreadMentionsList(true);
+          setThreadMentionQuery(queryText);
+        } else {
+          setShowThreadMentionsList(false);
+          setThreadMentionQuery('');
+        }
       } else {
         setShowThreadMentionsList(false);
         setThreadMentionQuery('');
       }
-    } else {
-      setShowThreadMentionsList(false);
-      setThreadMentionQuery('');
     }
 
     if (!activeThreadId) return;
@@ -387,24 +457,42 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
     const text = e.target.value;
     setNewMessage(text);
     
-    // Check cursor position for autocomplete mention query
+    // Check cursor position for user or channel autocomplete.
     const selectionStart = e.target.selectionStart || 0;
     const textBeforeCursor = text.substring(0, selectionStart);
     const lastAtIndex = textBeforeCursor.lastIndexOf('@');
-    
-    if (lastAtIndex !== -1) {
-      const queryText = textBeforeCursor.substring(lastAtIndex + 1);
-      const isStartOfWord = lastAtIndex === 0 || /\s/.test(textBeforeCursor.charAt(lastAtIndex - 1));
+    const lastHashIndex = textBeforeCursor.lastIndexOf('#');
+    const isHashAfterAt = lastHashIndex > lastAtIndex;
+
+    if (isHashAfterAt && lastHashIndex !== -1) {
+      const queryText = textBeforeCursor.substring(lastHashIndex + 1);
+      const isStartOfWord = lastHashIndex === 0 || /\s/.test(textBeforeCursor.charAt(lastHashIndex - 1));
       if (!/\s/.test(queryText) && isStartOfWord) {
-        setShowMentionsList(true);
-        setMentionQuery(queryText);
+        setShowChannelMentionsList(true);
+        setChannelMentionQuery(queryText);
+        setShowMentionsList(false);
+        setMentionQuery('');
+      } else {
+        setShowChannelMentionsList(false);
+        setChannelMentionQuery('');
+      }
+    } else {
+      setShowChannelMentionsList(false);
+      setChannelMentionQuery('');
+      if (lastAtIndex !== -1) {
+        const queryText = textBeforeCursor.substring(lastAtIndex + 1);
+        const isStartOfWord = lastAtIndex === 0 || /\s/.test(textBeforeCursor.charAt(lastAtIndex - 1));
+        if (!/\s/.test(queryText) && isStartOfWord) {
+          setShowMentionsList(true);
+          setMentionQuery(queryText);
+        } else {
+          setShowMentionsList(false);
+          setMentionQuery('');
+        }
       } else {
         setShowMentionsList(false);
         setMentionQuery('');
       }
-    } else {
-      setShowMentionsList(false);
-      setMentionQuery('');
     }
 
     const existingDrafts = drafts.filter(d => d.channelId !== channelId);
@@ -470,37 +558,150 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
 
   // Channel members list calculation
   const channelUsers = React.useMemo(() => {
-    return users.filter(usr => {
-      if (channelId === '1') return true; // #abdallah-sayed-communication-channel
-      if (usr.role === 'Super Admin' || usr.role === 'Admin') return true;
-      return !usr.channelIds || usr.channelIds.includes(channelId);
+    if (!channel) return [];
+    return users.filter(user => channel.memberIds
+      ? channel.memberIds.includes(user.id)
+      : Boolean(user.channelIds?.includes(channelId))
+    );
+  }, [users, channel, channelId]);
+
+  const canManageChannelMembers = Boolean(currentUser && (currentUser.role === 'Super Admin' || currentUser.role === 'Admin' || channelUsers.some(user => user.id === currentUser.id)));
+  const addableChannelUsers = React.useMemo(() => {
+    if (!channel) return [];
+    const memberIds = new Set(channelUsers.map(user => user.id));
+    const search = memberSearchQuery.trim().toLowerCase();
+    return users.filter(user => {
+      if (memberIds.has(user.id)) return false;
+      if (activeOrganizationId && !user.organizationIds?.includes(activeOrganizationId) && user.role !== 'Super Admin') return false;
+      if (channel.organizationId && user.role !== 'Super Admin' && !user.organizationIds?.includes(channel.organizationId)) return false;
+      if (!search) return true;
+      return user.name.toLowerCase().includes(search)
+        || user.email.toLowerCase().includes(search)
+        || user.username?.toLowerCase().includes(search);
     });
-  }, [users, channelId]);
+  }, [users, channel, channelUsers, activeOrganizationId, memberSearchQuery]);
+
+  const openAddMembers = () => {
+    if (!canManageChannelMembers) return;
+    setMemberSearchQuery('');
+    setSelectedMemberIds([]);
+    setMemberUpdateMessage(null);
+    setShowAddMembers(true);
+  };
+
+  const closeAddMembers = () => {
+    setShowAddMembers(false);
+    setMemberSearchQuery('');
+    setSelectedMemberIds([]);
+  };
+
+  const toggleSelectedMember = (userId: string) => {
+    setSelectedMemberIds(previous => previous.includes(userId)
+      ? previous.filter(id => id !== userId)
+      : [...previous, userId]
+    );
+  };
+
+  const addSelectedMembers = () => {
+    if (!channel || !canManageChannelMembers || selectedMemberIds.length === 0) return;
+    const currentMemberIds = channel.memberIds
+      ? channel.memberIds
+      : users.filter(user => user.channelIds?.includes(channel.id)).map(user => user.id);
+    const nextMemberIds = Array.from(new Set([...currentMemberIds, ...selectedMemberIds]));
+    const updatedChannel = { ...channel, memberIds: nextMemberIds };
+    const updatedChannels = channels.map(item => item.id === channel.id ? updatedChannel : item);
+    const updatedUsers = users.map(user => selectedMemberIds.includes(user.id)
+      ? { ...user, channelIds: Array.from(new Set([...(user.channelIds || []), channel.id])) }
+      : user
+    );
+    setChannels(updatedChannels);
+    setUsers(updatedUsers);
+    setMemberUpdateMessage(`${selectedMemberIds.length} member${selectedMemberIds.length === 1 ? '' : 's'} added.`);
+    setSelectedMemberIds([]);
+    setMemberSearchQuery('');
+  };
 
   // Global user list matched mentions for main compose
+  const mentionableUsers = React.useMemo(() => {
+    const usersById = new Map(channelUsers.map(user => [user.id, user]));
+    agents.forEach(agent => {
+      const isMember = channelUsers.some(user => user.id === agent.id);
+      if (isMember && !usersById.has(agent.id)) {
+        usersById.set(agent.id, {
+          id: agent.id,
+          name: agent.name,
+          email: agent.email,
+          role: 'AI Agent',
+          title: 'AI Assistant',
+          username: agent.username,
+          isAgent: true,
+          agentId: agent.id
+        });
+      }
+    });
+    return Array.from(usersById.values());
+  }, [channelUsers, agents]);
+
   const filteredMentionUsers = React.useMemo(() => {
     if (!showMentionsList) return [];
-    if (!mentionQuery) return users;
+    if (!mentionQuery) return mentionableUsers;
     const q = mentionQuery.toLowerCase();
-    return users.filter(usr => 
-      usr.name.toLowerCase().includes(q) || 
+    return mentionableUsers.filter(usr =>
+      usr.name.toLowerCase().includes(q) ||
       (usr.username && usr.username.toLowerCase().includes(q))
     );
-  }, [users, showMentionsList, mentionQuery]);
+  }, [mentionableUsers, showMentionsList, mentionQuery]);
 
   // Global user list matched mentions for thread compose
   const filteredThreadMentionUsers = React.useMemo(() => {
     if (!showThreadMentionsList) return [];
-    if (!threadMentionQuery) return users;
+    if (!threadMentionQuery) return mentionableUsers;
     const q = threadMentionQuery.toLowerCase();
-    return users.filter(usr => 
-      usr.name.toLowerCase().includes(q) || 
+    return mentionableUsers.filter(usr =>
+      usr.name.toLowerCase().includes(q) ||
       (usr.username && usr.username.toLowerCase().includes(q))
     );
-  }, [users, showThreadMentionsList, threadMentionQuery]);
+  }, [mentionableUsers, showThreadMentionsList, threadMentionQuery]);
+
+  const mentionableChannels = React.useMemo(
+    () => channels.filter(candidate => canAccessChannel(candidate, currentUser, activeOrganizationId)),
+    [channels, currentUser, activeOrganizationId]
+  );
+
+  const filteredMentionChannels = React.useMemo(() => {
+    if (!showChannelMentionsList) return [];
+    const query = channelMentionQuery.toLowerCase();
+    return mentionableChannels.filter(candidate => candidate.name.toLowerCase().includes(query));
+  }, [mentionableChannels, showChannelMentionsList, channelMentionQuery]);
+
+  const filteredThreadMentionChannels = React.useMemo(() => {
+    if (!showThreadChannelMentionsList) return [];
+    const query = threadChannelMentionQuery.toLowerCase();
+    return mentionableChannels.filter(candidate => candidate.name.toLowerCase().includes(query));
+  }, [mentionableChannels, showThreadChannelMentionsList, threadChannelMentionQuery]);
 
   const channelMessages = messages.filter(m => m.channelId === channelId);
   const activeThread = messages.find(m => m.id === activeThreadId);
+  const channelMessagesScrollKey = channelMessages
+    .map(message => `${message.id}:${message.text}`)
+    .join('|');
+  const threadRepliesScrollKey = activeThread
+    ? `${activeThread.id}:${activeThread.text}|${(activeThread.replies || [])
+      .map(reply => `${reply.id}:${reply.text}`)
+      .join('|')}`
+    : '';
+
+  useEffect(() => {
+    if (activeTab === 'messages') {
+      scrollToLatest(channelMessagesContainerRef);
+    }
+  }, [activeTab, channelMessagesScrollKey]);
+
+  useEffect(() => {
+    if (activeThreadId && activeThread) {
+      scrollToLatest(threadMessagesContainerRef);
+    }
+  }, [activeThreadId, threadRepliesScrollKey]);
 
   interface ExtractedFile {
     id: string;
@@ -535,7 +736,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
     channelMessages.forEach(msg => {
       const sender = users.find(u => u.id === msg.senderId);
       const senderName = msg.senderId === 'bot' ? 'Workspace Automation' : (sender?.name || 'Unknown User');
-      const senderAvatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${senderName.replace(/\s+/g, '')}`;
+      const senderAvatar = getAvatarUrl(sender, senderName);
 
       const findLinks = (textStr: string, msgId: string, replyId?: string) => {
         const urlRegex = /(https?:\/\/[^\s]+)/g;
@@ -633,7 +834,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
       msg.replies.forEach(reply => {
         const rSender = users.find(u => u.id === reply.senderId);
         const rSenderName = reply.senderId === 'bot' ? 'Workspace Automation' : (rSender?.name || 'Unknown User');
-        const rAvatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${rSenderName.replace(/\s+/g, '')}`;
+        const rAvatar = getAvatarUrl(rSender, rSenderName);
 
         if (reply.text.includes('🎤 Voice Note')) {
           const duration = reply.text.includes('(') ? reply.text.split('(')[1].split(')')[0] : '00:03';
@@ -785,9 +986,132 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
     setShowJumpToDateDropdown(false);
   };
 
+  const buildChannelConversationHistory = (parentMessageId?: string): AgentConversationMessage[] => {
+    const isAgentSender = (senderId: string): boolean => Boolean(agents.find(agent => agent.id === senderId));
+    const parentMessage = parentMessageId ? messages.find(message => message.id === parentMessageId) : undefined;
+    const historyItems = parentMessage
+      ? [parentMessage]
+      : messages.filter(message => message.channelId === channelId);
+    const entries: AgentConversationMessage[] = [];
+
+    historyItems.forEach(message => {
+      const sender = users.find(user => user.id === message.senderId);
+      const senderName = sender?.name || 'Workspace member';
+      entries.push({
+        role: sender?.isAgent || isAgentSender(message.senderId) ? 'assistant' : 'user',
+        content: `${senderName}: ${message.text}\nThread link: ${buildWorkspaceLink(channelId, message.id)}`
+      });
+      if (parentMessage) {
+        (message.replies || []).forEach(reply => {
+          const replySender = users.find(user => user.id === reply.senderId);
+          entries.push({
+            role: replySender?.isAgent || isAgentSender(reply.senderId) ? 'assistant' : 'user',
+            content: `${replySender?.name || 'Workspace member'}: ${reply.text}\nComment link: ${buildWorkspaceLink(channelId, message.id, reply.id)}`
+          });
+        });
+      }
+    });
+
+    return entries;
+  };
+
+  const respondToPublicMention = (prompt: string, agent: typeof agents[0], parentMessageId?: string) => {
+    const agentIsMember = channelUsers.some(user => user.id === agent.id);
+    if (!agent.enabled || channel?.isPrivate || !agentIsMember) return;
+
+    if (agentStatusTimerRef.current) window.clearTimeout(agentStatusTimerRef.current);
+    agentRequestControllerRef.current?.abort();
+    const controller = new AbortController();
+    agentRequestControllerRef.current = controller;
+    const requestGeneration = agentRequestGenerationRef.current + 1;
+    agentRequestGenerationRef.current = requestGeneration;
+    const isCurrentRequest = () => agentRequestGenerationRef.current === requestGeneration && !controller.signal.aborted;
+    const placeholderId = `agent_placeholder_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const placeholderText = `🔎 ${agent.name} is searching workspace context…`;
+    const updatePlaceholder = (text: string) => {
+      if (!isCurrentRequest()) return;
+      setMessages(previous => parentMessageId
+        ? previous.map(message => message.id === parentMessageId
+          ? { ...message, replies: (message.replies || []).map(reply => reply.id === placeholderId ? { ...reply, text } : reply) }
+          : message)
+        : previous.map(message => message.id === placeholderId ? { ...message, text } : message)
+      );
+    };
+    const insertPlaceholder = () => {
+      setMessages(previous => parentMessageId
+        ? previous.map(message => message.id === parentMessageId
+          ? { ...message, replies: [...(message.replies || []), { id: placeholderId, senderId: agent.id, text: placeholderText, timestamp: Date.now(), isRead: true }] }
+          : message)
+        : [...previous, { id: placeholderId, channelId, senderId: agent.id, text: placeholderText, timestamp: Date.now(), isRead: true, replies: [], reactions: [] }]
+      );
+    };
+    const replacePlaceholder = (text: string) => {
+      if (!isCurrentRequest()) return;
+      setMessages(previous => parentMessageId
+        ? previous.map(message => message.id === parentMessageId
+          ? { ...message, replies: (message.replies || []).map(reply => reply.id === placeholderId ? { ...reply, text } : reply) }
+          : message)
+        : previous.map(message => message.id === placeholderId ? { ...message, text } : message)
+      );
+    };
+
+    insertPlaceholder();
+    setAgentStatus({ name: agent.name, status: 'searching' });
+    agentStatusTimerRef.current = window.setTimeout(() => {
+      if (!isCurrentRequest()) return;
+      setAgentStatus({ name: agent.name, status: 'thinking' });
+      updatePlaceholder('💭 Thinking about your request…');
+      agentStatusTimerRef.current = window.setTimeout(() => {
+        if (!isCurrentRequest()) return;
+        setAgentStatus({ name: agent.name, status: 'checking' });
+        updatePlaceholder(agent.databaseAccess?.webSearch ? '🌐 Checking workspace data and web search…' : '🧭 Checking allowed workspace data…');
+        agentStatusTimerRef.current = window.setTimeout(() => {
+          if (!isCurrentRequest()) return;
+          setAgentStatus({ name: agent.name, status: 'typing' });
+          updatePlaceholder('⌨️ Typing…');
+          agentStatusTimerRef.current = window.setTimeout(() => {
+            if (!isCurrentRequest()) return;
+            const allowedContext = [
+              agent.databaseAccess?.organizations ? 'organization data' : null,
+              agent.databaseAccess?.publicThreads ? 'public threads' : null,
+              agent.databaseAccess?.webSearch ? 'web search when applicable' : null
+            ].filter(Boolean).join(' and ') || 'no workspace data';
+            const fallback = `@${currentUser?.username || 'team'} I reviewed the available ${allowedContext}. Regarding “${prompt}”: ${String(agent.jobDetails || '')}`;
+            let workspaceContext = 'No workspace data is available to this agent.';
+            try {
+              workspaceContext = buildAgentWorkspaceContext(agent, messages, channels, organizations, users, userStatus, currentUser?.id || '', activeOrganizationId, prompt);
+            } catch {
+              // Use the fallback context if persisted workspace data is malformed.
+            }
+            const conversationHistory = buildChannelConversationHistory(parentMessageId);
+            void requestAgentReply(agent, prompt, workspaceContext, fallback, conversationHistory, controller.signal).then(agentText => {
+              if (!isCurrentRequest()) return;
+              replacePlaceholder(agentText);
+              setAgentStatus(null);
+              agentRequestControllerRef.current = null;
+            }).catch(error => {
+              if (error instanceof DOMException && error.name === 'AbortError') return;
+              if (!isCurrentRequest()) return;
+              replacePlaceholder('⚠️ I could not complete that request. Please try again.');
+              setAgentStatus(null);
+              agentRequestControllerRef.current = null;
+            });
+          }, 650);
+        }, 500);
+      }, 450);
+    }, 300);
+  };
+
+  useEffect(() => () => {
+    if (agentStatusTimerRef.current) window.clearTimeout(agentStatusTimerRef.current);
+    agentRequestControllerRef.current?.abort();
+    agentRequestGenerationRef.current += 1;
+  }, []);
+
   const sendMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim() || !currentUser) return;
+    const outgoingText = newMessage.trim();
 
     const message = {
       id: `msg_${Date.now()}`,
@@ -800,6 +1124,8 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
     };
 
     setMessages([...messages, message]);
+    const mentionedAgent = !channel?.isPrivate && agents.find(agent => agent.enabled && containsAgentMention(outgoingText, agent.username));
+    if (mentionedAgent) respondToPublicMention(outgoingText, mentionedAgent);
     setNewMessage('');
     setDrafts(drafts.filter(d => d.channelId !== channelId));
   };
@@ -860,6 +1186,8 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
         ? { ...m, replies: [...m.replies, reply] }
         : m
     ));
+    const mentionedAgent = !channel?.isPrivate && agents.find(agent => agent.enabled && containsAgentMention(threadReply, agent.username));
+    if (mentionedAgent) respondToPublicMention(threadReply, mentionedAgent, activeThreadId);
     setThreadReply('');
     setDrafts(drafts.filter(d => d.threadId !== activeThreadId));
   };
@@ -868,6 +1196,30 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const openMentionPicker = (isThread: boolean = false) => {
+    const ref = isThread ? threadInputRef : channelInputRef;
+    if (!ref.current) return;
+    const currentText = isThread ? threadReply : newMessage;
+    const cursor = ref.current.selectionStart || currentText.length;
+    const needsSpace = cursor > 0 && !/\s/.test(currentText.charAt(cursor - 1));
+    const insertedText = `${needsSpace ? ' ' : ''}@`;
+    const updatedText = currentText.slice(0, cursor) + insertedText + currentText.slice(cursor);
+    if (isThread) {
+      setThreadReply(updatedText);
+      setShowThreadMentionsList(true);
+      setThreadMentionQuery('');
+    } else {
+      setNewMessage(updatedText);
+      setShowMentionsList(true);
+      setMentionQuery('');
+    }
+    const newCursorPosition = cursor + insertedText.length;
+    setTimeout(() => {
+      ref.current?.focus();
+      ref.current?.setSelectionRange(newCursorPosition, newCursorPosition);
+    }, 0);
   };
 
   const handleMentionClick = (username: string, isThread: boolean = false) => {
@@ -906,6 +1258,34 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
         }
       }, 10);
     }
+  };
+
+  const handleChannelMentionSelect = (channelName: string, isThread: boolean = false) => {
+    const ref = isThread ? threadInputRef : channelInputRef;
+    if (!ref.current) return;
+    const start = ref.current.selectionStart || 0;
+    const currentText = isThread ? threadReply : newMessage;
+    const textBeforeCursor = currentText.substring(0, start);
+    const textAfterCursor = currentText.substring(start);
+    const lastHashIndex = textBeforeCursor.lastIndexOf('#');
+    if (lastHashIndex === -1) return;
+
+    const updatedText = `${textBeforeCursor.substring(0, lastHashIndex)}#${channelName} ${textAfterCursor}`;
+    if (isThread) {
+      setThreadReply(updatedText);
+      setShowThreadChannelMentionsList(false);
+      setThreadChannelMentionQuery('');
+    } else {
+      setNewMessage(updatedText);
+      setShowChannelMentionsList(false);
+      setChannelMentionQuery('');
+    }
+
+    const newCursorPos = lastHashIndex + channelName.length + 2;
+    setTimeout(() => {
+      ref.current?.focus();
+      ref.current?.setSelectionRange(newCursorPos, newCursorPos);
+    }, 10);
   };
 
   const handleToggleAudioRecording = () => {
@@ -955,6 +1335,19 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
 
   if (!channel) {
     return <div className="p-8 text-gray-500">Channel not found</div>;
+  }
+
+  if (!canAccessChannel(channel, currentUser, activeOrganizationId)) {
+    return (
+      <div className="flex h-full items-center justify-center bg-[#1A1D21] text-gray-400 p-8 text-center">
+        <div>
+          <Lock className="h-8 w-8 mx-auto mb-3 text-gray-600" />
+          <p className="text-sm font-semibold text-gray-200">You don’t have access to this channel.</p>
+          <p className="text-xs mt-1 text-gray-500">Ask a workspace administrator to add you as a member.</p>
+          <button onClick={() => onNavigate('home')} className="mt-4 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white">Back to home</button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -1234,7 +1627,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
         {activeTab === 'messages' && (
           <>
             {/* Message Log View Window */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div ref={channelMessagesContainerRef} className="flex-1 overflow-y-auto p-6 space-y-6">
           
           {searchedChannelMessages.length === 0 ? (
             <div className="p-16 text-center text-gray-500 max-w-sm mx-auto flex flex-col items-center justify-center select-none">
@@ -1294,17 +1687,18 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
                       <div key={msg.id} className="relative flex hover:bg-[#2A2B32]/30 p-2.5 -mx-2.5 rounded-lg transition-colors group">
                         
                         <div className="h-10 w-10 bg-gray-700 rounded mr-4 shrink-0 overflow-hidden border border-gray-800">
-                          <img 
-                            src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${sender?.name || "A"}&backgroundColor=b6e3f4`} 
-                            alt={sender?.name} 
-                            referrerPolicy="no-referrer"
+                          <UserAvatar
+                            user={sender}
+                            fallbackName="A"
+                            alt={sender?.name || 'User'}
+                            className="h-full w-full object-cover"
                           />
                         </div>
 
                         <div className="flex-1 min-w-0">
                           <div className="flex items-baseline mb-1">
                             <span className="font-bold text-sm text-gray-200 hover:underline cursor-pointer mr-2.5 shrink-0">
-                              {sender?.name}
+                              <DisplayName name={sender?.name || 'Unknown User'} isAgent={sender?.isAgent} />
                             </span>
                             
                             {sender?.role === 'Super Admin' && (
@@ -1361,10 +1755,11 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
                                   const replier = users.find(u => u.id === r.senderId);
                                   return (
                                     <div key={i} className="h-5 w-5 rounded-full overflow-hidden border border-[#1A1D21] bg-gray-600">
-                                       <img 
-                                         src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${replier?.name || "X"}&backgroundColor=b6e3f4`} 
-                                         alt="" 
-                                         referrerPolicy="no-referrer"
+                                       <UserAvatar
+                                         user={replier}
+                                         fallbackName="X"
+                                         alt={replier?.name || 'User'}
+                                         className="h-full w-full object-cover"
                                        />
                                     </div>
                                   );
@@ -1386,8 +1781,8 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
           )}
         </div>
 
-        {/* DELIVERABLE SLACK-STYLE REFACTOR RICH TEXT EDITOR INPUT CONTAINER */}
-        <div className="mx-6 mb-6 mt-1 bg-[#1A1D21] border border-gray-700/80 rounded-lg overflow-hidden flex flex-col focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500/20 shadow-xl relative">
+        {/* DELIVERABLE DESKFLOW-STYLE REFACTOR RICH TEXT EDITOR INPUT CONTAINER */}
+        <div className="mx-6 mb-6 mt-1 bg-[#1A1D21] border border-gray-700/80 rounded-lg flex flex-col focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500/20 shadow-xl relative">
           
           {/* Active Audio Recorder Panel Overlay */}
           {isRecordingAudio && (
@@ -1473,8 +1868,34 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
             </div>
           )}
 
+          {/* Autocomplete Channel Mentions Select Overlay Popup */}
+          {showChannelMentionsList && (
+            <div className="absolute bottom-full left-3 mb-2 w-64 bg-[#121317] border border-gray-800 rounded-xl shadow-2xl z-[60] overflow-hidden select-none animate-fade-in-up">
+              <div className="px-3.5 py-1.5 text-[9px] text-gray-500 font-bold uppercase border-b border-gray-850 tracking-wider flex items-center justify-between">
+                <span>Mention Channel</span>
+                {channelMentionQuery && (
+                  <span className="text-[8px] font-mono lowercase bg-gray-800 px-1 py-0.2 rounded text-gray-400">#{channelMentionQuery}</span>
+                )}
+              </div>
+              <div className="max-h-48 overflow-y-auto divide-y divide-gray-850/30">
+                {filteredMentionChannels.map(candidate => (
+                  <button
+                    key={candidate.id}
+                    type="button"
+                    onClick={() => handleChannelMentionSelect(candidate.name)}
+                    className="w-full text-left px-3.5 py-2 hover:bg-gray-800 text-xs text-gray-200 hover:text-white flex items-center space-x-2.5 transition-colors cursor-pointer"
+                  >
+                    {candidate.isPrivate ? <Lock className="h-4 w-4 text-amber-400 shrink-0" /> : <Hash className="h-4 w-4 text-blue-400 shrink-0" />}
+                    <span className="font-semibold truncate">#{candidate.name}</span>
+                  </button>
+                ))}
+                {filteredMentionChannels.length === 0 && <div className="px-3.5 py-3 text-xs text-gray-500">No accessible channels found</div>}
+              </div>
+            </div>
+          )}
+
           {/* Autocomplete User Mentions Select Overlay Popup */}
-          {showMentionsList && filteredMentionUsers.length > 0 && (
+          {showMentionsList && (
             <div className="absolute bottom-full left-3 mb-2 w-64 bg-[#121317] border border-gray-800 rounded-xl shadow-2xl z-50 overflow-hidden select-none animate-fade-in-up">
               <div className="px-3.5 py-1.5 text-[9px] text-gray-500 font-bold uppercase border-b border-gray-850 tracking-wider flex items-center justify-between">
                 <span>Mention Team Member</span>
@@ -1490,12 +1911,12 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
                     onClick={() => handleMentionClick(usr.username || usr.name, false)}
                     className="w-full text-left px-3 py-2 hover:bg-gray-800 text-xs text-gray-200 hover:text-white flex items-center space-x-2.5 transition-colors cursor-pointer"
                   >
-                    <img className="h-5 w-5 rounded-full object-cover bg-gray-700 shrink-0" src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${usr.name.replace(/\s+/g, '')}`} alt="" referrerPolicy="no-referrer" />
+                    <UserAvatar user={usr} className="h-5 w-5 rounded-full object-cover bg-gray-700 shrink-0" alt={usr.name} />
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-1.5Packed">
+                      <div className="flex items-center justify-between gap-1.5">
                         <span className="font-semibold truncate text-gray-200 hover:text-white flex items-center gap-1.5">
                           <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${usr.role === 'Super Admin' || usr.id === '8' ? 'bg-emerald-500' : 'bg-gray-600'}`}></span>
-                          {usr.name}
+                          <DisplayName name={usr.name} isAgent={usr.isAgent} />
                         </span>
                         {usr.username && (
                           <span className="text-[10px] text-gray-400 font-mono shrink-0">@{usr.username}</span>
@@ -1599,7 +2020,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
                 {/* At-mention select trigger */}
                 <button 
                   type="button" 
-                  onClick={() => setShowMentionsList(!showMentionsList)}
+                  onClick={() => openMentionPicker(false)}
                   className={`p-1.5 rounded cursor-pointer transition ${
                     showMentionsList 
                       ? 'bg-blue-600/10 text-blue-400' 
@@ -2319,31 +2740,124 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
             <h3 className="font-bold text-gray-100 flex items-center text-sm">
               <Users className="h-4.5 w-4.5 mr-2 text-gray-400" /> Channel Members ({channelUsers.length})
             </h3>
-            <button 
-              onClick={() => setShowMembersDrawer(false)} 
-              className="text-gray-500 hover:text-white transition cursor-pointer p-1 rounded hover:bg-gray-800"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              {canManageChannelMembers && (
+                <button
+                  type="button"
+                  onClick={openAddMembers}
+                  className="text-gray-500 hover:text-blue-300 transition cursor-pointer p-1 rounded hover:bg-gray-800"
+                  title="Add people to channel"
+                  aria-label="Add people to channel"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              )}
+              <button
+                onClick={() => setShowMembersDrawer(false)}
+                className="text-gray-500 hover:text-white transition cursor-pointer p-1 rounded hover:bg-gray-800"
+                aria-label="Close channel members"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
           
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             <div className="bg-blue-600/10 p-3 rounded-lg border border-blue-500/20 text-xs text-blue-300 leading-relaxed">
               Super Admins, Admins, and members explicitly assigned access are shown here.
             </div>
+
+            {showAddMembers && (
+              <div className="rounded-xl border border-blue-500/30 bg-[#1A1D21] p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold text-white">Add people</p>
+                  <button
+                    type="button"
+                    onClick={closeAddMembers}
+                    className="p-1 text-gray-500 hover:text-white rounded hover:bg-gray-800 cursor-pointer"
+                    title="Close add people"
+                    aria-label="Close add people"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-500" />
+                  <input
+                    type="search"
+                    value={memberSearchQuery}
+                    onChange={event => setMemberSearchQuery(event.target.value)}
+                    placeholder="Search people..."
+                    aria-label="Search people to add"
+                    className="w-full rounded-lg border border-gray-700 bg-gray-950/60 py-2 pl-8 pr-2 text-xs text-gray-200 placeholder:text-gray-600 focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+
+                <div className="max-h-56 overflow-y-auto space-y-1">
+                  {addableChannelUsers.length > 0 ? addableChannelUsers.map(usr => (
+                    <label
+                      key={usr.id}
+                      className={`flex items-center gap-2 rounded-lg p-2 cursor-pointer transition-colors ${selectedMemberIds.includes(usr.id) ? 'bg-blue-500/15 border border-blue-500/40' : 'border border-transparent hover:bg-gray-800/70'}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedMemberIds.includes(usr.id)}
+                        onChange={() => toggleSelectedMember(usr.id)}
+                        className="h-3.5 w-3.5 accent-blue-500 shrink-0"
+                      />
+                      <UserAvatar
+                        user={usr}
+                        className="h-7 w-7 rounded-full border border-gray-800 bg-gray-700 object-cover shrink-0"
+                        alt={usr.name}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-xs font-bold text-gray-200 truncate"><DisplayName name={usr.name} isAgent={usr.isAgent} /></span>
+                        <span className="block text-[10px] text-gray-500 truncate">{usr.email}{usr.title ? ` • ${usr.title}` : ''}</span>
+                      </span>
+                    </label>
+                  )) : (
+                    <p className="px-2 py-4 text-center text-xs text-gray-500">No people available to add.</p>
+                  )}
+                </div>
+
+                {memberUpdateMessage && (
+                  <p className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-2 text-[11px] text-emerald-300" role="status">
+                    {memberUpdateMessage}
+                  </p>
+                )}
+
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={closeAddMembers}
+                    className="rounded-lg px-3 py-1.5 text-[11px] font-bold text-gray-400 hover:bg-gray-800 hover:text-white cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={addSelectedMembers}
+                    disabled={selectedMemberIds.length === 0}
+                    className="rounded-lg bg-blue-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+                  >
+                    Add selected
+                  </button>
+                </div>
+              </div>
+            )}
             
             <div className="space-y-3">
               {channelUsers.map(usr => (
                 <div key={usr.id} className="flex items-center justify-between p-2 hover:bg-[#1A1D21] rounded-xl transition-all border border-transparent hover:border-gray-800/60">
                   <div className="flex items-center space-x-3 min-w-0">
-                    <img 
-                      className="w-9 h-9 rounded-full border border-gray-800 bg-gray-700 object-cover" 
-                      src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${usr.name.replace(/\s+/g, '')}`} 
-                      alt="" 
-                      referrerPolicy="no-referrer"
+                    <UserAvatar
+                      user={usr}
+                      className="w-9 h-9 rounded-full border border-gray-800 bg-gray-700 object-cover"
+                      alt={usr.name}
                     />
                     <div className="min-w-0">
-                      <p className="text-xs font-bold text-gray-200 truncate">{usr.name}</p>
+                      <p className="text-xs font-bold text-gray-200 truncate"><DisplayName name={usr.name} isAgent={usr.isAgent} /></p>
                       <p className="text-[10px] text-gray-500 truncate mt-0.5">{usr.title || usr.role}</p>
                     </div>
                   </div>
@@ -2367,19 +2881,20 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          <div ref={threadMessagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-6">
             {/* Original Message */}
-            <div className="relative group flex mb-6 border-b border-gray-800 pb-6 hover:bg-[#2A2B32]/30 p-2 -mx-2 rounded transition-colors">
+            <div id={`thread-item-${activeThread.id}`} className={`relative group flex mb-6 border-b border-gray-800 pb-6 p-2 -mx-2 rounded transition-colors ${highlightedThreadItemId === activeThread.id ? 'bg-blue-500/15 ring-1 ring-blue-400/60' : 'hover:bg-[#2A2B32]/30'}`}>
               <div className="h-10 w-10 bg-gray-700 rounded mr-3 shrink-0 overflow-hidden">
-                <img 
-                  src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${users.find(u => u.id === activeThread.senderId)?.name || "Z"}&backgroundColor=b6e3f4`} 
-                  alt="" 
-                  referrerPolicy="no-referrer"
+                <UserAvatar
+                  user={users.find(u => u.id === activeThread.senderId)}
+                  fallbackName="Z"
+                  alt="User"
+                  className="h-full w-full object-cover"
                 />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-baseline mb-1">
-                  <span className="font-bold text-gray-200 mr-2">{users.find(u => u.id === activeThread.senderId)?.name}</span>
+                  <span className="font-bold text-gray-200 mr-2"><DisplayName name={users.find(u => u.id === activeThread.senderId)?.name || 'Unknown User'} isAgent={users.find(u => u.id === activeThread.senderId)?.isAgent} /></span>
                   <span className="text-xs text-gray-500">{new Date(activeThread.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                 </div>
                 <div className="text-gray-300"><FormattedMessage text={activeThread.text} /></div>
@@ -2404,17 +2919,18 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
             {activeThread.replies.slice(Math.max(0, activeThread.replies.length - visibleRepliesCount)).map(reply => {
               const replier = users.find(u => u.id === reply.senderId);
               return (
-                <div key={reply.id} className="relative group flex hover:bg-[#2A2B32]/30 p-2 -mx-2 rounded transition-colors mt-2">
+                <div id={`thread-item-${reply.id}`} key={reply.id} className={`relative group flex p-2 -mx-2 rounded transition-colors mt-2 ${highlightedThreadItemId === reply.id ? 'bg-blue-500/15 ring-1 ring-blue-400/60' : 'hover:bg-[#2A2B32]/30'}`}>
                   <div className="h-8 w-8 bg-gray-700 rounded mr-3 shrink-0 overflow-hidden">
-                    <img 
-                      src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${replier?.name || "Y"}&backgroundColor=b6e3f4`} 
-                      alt="" 
-                      referrerPolicy="no-referrer"
+                    <UserAvatar
+                      user={replier}
+                      fallbackName="Y"
+                      alt={replier?.name || 'User'}
+                      className="h-full w-full object-cover"
                     />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline mb-1">
-                      <span className="font-bold text-gray-200 text-sm mr-2">{replier?.name}</span>
+                      <span className="font-bold text-gray-200 text-sm mr-2"><DisplayName name={replier?.name || 'Unknown User'} isAgent={replier?.isAgent} /></span>
                       <span className="text-[10px] text-gray-500">{new Date(reply.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
                     <div className="text-sm text-gray-300"><FormattedMessage text={reply.text} /></div>
@@ -2427,9 +2943,35 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
           </div>
 
           {/* Reply Input */}
-          <div className="mx-4 mb-4 bg-[#1A1D21] border border-gray-700 rounded-lg overflow-hidden flex flex-col focus-within:border-gray-500 relative animate-fade-in">
+          <div className="mx-4 mb-4 bg-[#1A1D21] border border-gray-700 rounded-lg flex flex-col focus-within:border-gray-500 relative animate-fade-in">
+            {/* Thread Autocomplete Channel Mentions Select Overlay Popup */}
+            {showThreadChannelMentionsList && (
+              <div className="absolute bottom-full left-3 mb-2 w-64 bg-[#121317] border border-gray-800 rounded-xl shadow-2xl z-[60] overflow-hidden select-none animate-fade-in-up">
+                <div className="px-3.5 py-1.5 text-[9px] text-gray-500 font-bold uppercase border-b border-gray-850 tracking-wider flex items-center justify-between">
+                  <span>Mention Channel</span>
+                  {threadChannelMentionQuery && (
+                    <span className="text-[8px] font-mono lowercase bg-gray-800 px-1 py-0.2 rounded text-gray-400">#{threadChannelMentionQuery}</span>
+                  )}
+                </div>
+                <div className="max-h-48 overflow-y-auto divide-y divide-gray-850/30">
+                  {filteredThreadMentionChannels.map(candidate => (
+                    <button
+                      key={candidate.id}
+                      type="button"
+                      onClick={() => handleChannelMentionSelect(candidate.name, true)}
+                      className="w-full text-left px-3.5 py-2 hover:bg-gray-800 text-xs text-gray-200 hover:text-white flex items-center space-x-2.5 transition-colors cursor-pointer"
+                    >
+                      {candidate.isPrivate ? <Lock className="h-4 w-4 text-amber-400 shrink-0" /> : <Hash className="h-4 w-4 text-blue-400 shrink-0" />}
+                      <span className="font-semibold truncate">#{candidate.name}</span>
+                    </button>
+                  ))}
+                  {filteredThreadMentionChannels.length === 0 && <div className="px-3.5 py-3 text-xs text-gray-500">No accessible channels found</div>}
+                </div>
+              </div>
+            )}
+
             {/* Thread Autocomplete User Mentions Select Overlay Popup */}
-            {showThreadMentionsList && filteredThreadMentionUsers.length > 0 && (
+            {showThreadMentionsList && (
               <div className="absolute bottom-full left-3 mb-2 w-64 bg-[#121317] border border-gray-800 rounded-xl shadow-2xl z-50 overflow-hidden select-none animate-fade-in-up">
                 <div className="px-3.5 py-1.5 text-[9px] text-gray-500 font-bold uppercase border-b border-gray-850 tracking-wider flex items-center justify-between">
                   <span>Mention Team Member</span>
@@ -2445,12 +2987,12 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
                       onClick={() => handleMentionClick(usr.username || usr.name, true)}
                       className="w-full text-left px-3.5 py-2 hover:bg-gray-800 text-xs text-gray-200 hover:text-white flex items-center space-x-2.5 transition-colors cursor-pointer"
                     >
-                      <img className="h-5 w-5 rounded-full object-cover bg-gray-700 shrink-0" src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${usr.name.replace(/\s+/g, '')}`} alt="" referrerPolicy="no-referrer" />
+                      <UserAvatar user={usr} className="h-5 w-5 rounded-full object-cover bg-gray-700 shrink-0" alt={usr.name} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between">
                           <span className="font-semibold truncate text-gray-200 hover:text-white flex items-center gap-1.5">
                             <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${usr.role === 'Super Admin' || usr.id === '8' ? 'bg-emerald-500' : 'bg-gray-600'}`}></span>
-                            {usr.name}
+                            <DisplayName name={usr.name} isAgent={usr.isAgent} />
                           </span>
                           {usr.username && (
                             <span className="text-[10px] text-gray-400 font-mono shrink-0">@{usr.username}</span>
@@ -2529,7 +3071,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
 
                   <button 
                     type="button" 
-                    onClick={() => setShowThreadMentionsList(!showThreadMentionsList)}
+                    onClick={() => openMentionPicker(true)}
                     className={`p-1.5 rounded cursor-pointer transition ${showThreadMentionsList ? 'bg-blue-600/10 text-blue-400' : 'text-gray-405 hover:text-gray-200 hover:bg-gray-700'}`}
                     title="Mention team member"
                   >

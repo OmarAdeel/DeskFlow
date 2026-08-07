@@ -2,12 +2,15 @@ import {
   Search, MessageSquare, Send, Phone, Video, MoreVertical, 
   Smile, Check, X, Bold, Italic, Strikethrough, Link as LinkIcon, 
   ListOrdered, List, AlignLeft, Code, SquareSlash, Plus, Type, 
-  AtSign, ChevronDown, CheckCircle2, Mic, MicOff, VideoOff, PhoneOff, MonitorUp, Volume2, ArrowLeft
+  AtSign, Hash, Lock, ChevronDown, CheckCircle2, Mic, MicOff, VideoOff, PhoneOff, MonitorUp, Volume2, ArrowLeft, Bot
 } from 'lucide-react';
 import React, { useState, useEffect, useRef } from 'react';
-import { useWorkspace } from '../../context';
+import { canAccessChannel, useWorkspace } from '../../context';
 import { EmojiDeluxe } from '../EmojiDeluxe';
 import { FormattedMessage } from '../FormattedMessage';
+import { UserAvatar } from '../UserAvatar';
+import { DisplayName } from '../DisplayName';
+import { AgentConversationMessage, buildAgentWorkspaceContext, requestAgentReply } from '../../utils/agentResponse';
 
 interface DMReply {
   id: string;
@@ -30,16 +33,22 @@ interface DMMessage {
 }
 
 export function DMsView({ userId }: { userId?: string }) {
-  const { users, currentUser } = useWorkspace();
+  const { users, currentUser, userStatus, organizations, agents, messages, channels, activeOrganizationId } = useWorkspace();
+  const organizationUsers = users.filter(user => {
+    if (!activeOrganizationId) return true;
+    return Boolean(user.organizationIds?.includes(activeOrganizationId));
+  });
 
-  const systemUsers = users.map((u, index) => ({
+  const systemUsers = organizationUsers.map((u, index) => ({
     id: u.id,
     name: u.name,
     role: u.title || u.role || 'Team Member',
     online: u.name === 'Abdallah Sayed' ? true : index % 2 === 0,
     lastSeen: index % 3 === 0 ? 'Now' : `${index + 1}h ago`,
     unread: index === 0 ? 2 : index === 3 ? 1 : 0,
-    avatarSeed: u.name
+    avatarUrl: u.avatarUrl,
+    avatarSeed: u.name,
+    isAgent: Boolean(u.isAgent)
   }));
 
   const [selectedUser, setSelectedUser] = useState<typeof systemUsers[0]>(() => {
@@ -47,26 +56,81 @@ export function DMsView({ userId }: { userId?: string }) {
       const match = systemUsers.find(u => u.id === userId);
       if (match) return match;
     }
-    const filtered = systemUsers.filter(u => u.name !== 'Abdallah Sayed');
+    const filtered = systemUsers.filter(u => u.id !== currentUser?.id);
     return filtered[0] || systemUsers[0];
   });
 
   const [mobileShowChat, setMobileShowChat] = useState<boolean>(Boolean(userId));
 
   useEffect(() => {
-    if (userId) {
-      const match = systemUsers.find(u => u.id === userId);
-      if (match) {
-        setSelectedUser(match);
+    const match = userId ? systemUsers.find(u => u.id === userId) : undefined;
+    if (match) {
+      setSelectedUser(match);
+      setActiveThreadId(null);
+      setMobileShowChat(true);
+      return;
+    }
+    if (!systemUsers.some(user => user.id === selectedUser.id)) {
+      const nextUser = systemUsers.find(user => user.id !== currentUser?.id) || systemUsers[0];
+      if (nextUser) {
+        setSelectedUser(nextUser);
         setActiveThreadId(null);
-        setMobileShowChat(true);
+      }
+      setMobileShowChat(false);
+    }
+  }, [userId, users, activeOrganizationId]);
+
+  useEffect(() => {
+    const handleIncomingComposeMessage = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { userId?: string; text?: string; createdAt?: number };
+      if (!detail?.userId || !detail.text) return;
+      const target = systemUsers.find(user => user.id === detail.userId);
+      if (!target) return;
+      setSelectedUser(target);
+      setMobileShowChat(true);
+      const outgoingText = detail.text.trim();
+      const newMsg: DMMessage = {
+        id: `compose_dm_${detail.createdAt || Date.now()}`,
+        senderId: currentUser?.id || '8',
+        senderName: 'You',
+        text: outgoingText,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        isMe: true,
+        reactions: [],
+        replies: []
+      };
+      setConversations(previous => ({ ...previous, [target.id]: [...(previous[target.id] || []), newMsg] }));
+      if (target.isAgent) respondAsAgent(target, outgoingText);
+      setDmText('');
+      setDmDrafts(previous => ({ ...previous, [target.id]: '' }));
+      localStorage.removeItem('workspace_pending_dm');
+    };
+    window.addEventListener('send-dm-message', handleIncomingComposeMessage);
+    const pending = localStorage.getItem('workspace_pending_dm');
+    if (pending) {
+      try {
+        const detail = JSON.parse(pending) as { userId?: string; text?: string; createdAt?: number };
+        if (detail.createdAt && Date.now() - detail.createdAt < 10000 && pendingDmHandledRef.current !== pending) {
+          pendingDmHandledRef.current = pending;
+          handleIncomingComposeMessage(new CustomEvent('send-dm-message', { detail }));
+        } else if (detail.createdAt && Date.now() - detail.createdAt >= 10000) {
+          localStorage.removeItem('workspace_pending_dm');
+        }
+      } catch {
+        localStorage.removeItem('workspace_pending_dm');
       }
     }
-  }, [userId, users]);
+    return () => window.removeEventListener('send-dm-message', handleIncomingComposeMessage);
+  }, [users]);
 
   const [userSearch, setUserSearch] = useState('');
   const [dmText, setDmText] = useState('');
   const [threadReply, setThreadReply] = useState('');
+  const [agentStatus, setAgentStatus] = useState<'searching' | 'thinking' | 'checking' | 'typing' | null>(null);
+  const agentStatusTimerRef = useRef<number | null>(null);
+  const agentRequestControllerRef = useRef<AbortController | null>(null);
+  const agentRequestGenerationRef = useRef(0);
+  const pendingDmHandledRef = useRef<string | null>(null);
   
   // Staging Drafts per user so typing states are not lost
   const [dmDrafts, setDmDrafts] = useState<Record<string, string>>({});
@@ -93,26 +157,66 @@ export function DMsView({ userId }: { userId?: string }) {
   const [mentionQuery, setMentionQuery] = useState('');
   const [showThreadMentionsList, setShowThreadMentionsList] = useState(false);
   const [threadMentionQuery, setThreadMentionQuery] = useState('');
+  const [showChannelMentionsList, setShowChannelMentionsList] = useState(false);
+  const [channelMentionQuery, setChannelMentionQuery] = useState('');
+  const [showThreadChannelMentionsList, setShowThreadChannelMentionsList] = useState(false);
+  const [threadChannelMentionQuery, setThreadChannelMentionQuery] = useState('');
+
+  const mentionableUsers = React.useMemo(() => {
+    const usersById = new Map(organizationUsers.map(user => [user.id, user]));
+    agents.forEach(agent => {
+      if (!usersById.has(agent.id)) {
+        usersById.set(agent.id, {
+          id: agent.id,
+          name: agent.name,
+          email: agent.email,
+          role: 'AI Agent',
+          title: 'AI Assistant',
+          username: agent.username,
+          isAgent: true,
+          agentId: agent.id
+        });
+      }
+    });
+    return Array.from(usersById.values());
+  }, [organizationUsers, agents]);
 
   const filteredMentionUsers = React.useMemo(() => {
     if (!showMentionsList) return [];
-    if (!mentionQuery) return users;
+    if (!mentionQuery) return mentionableUsers;
     const q = mentionQuery.toLowerCase();
-    return users.filter(usr => 
-      usr.name.toLowerCase().includes(q) || 
+    return mentionableUsers.filter(usr =>
+      usr.name.toLowerCase().includes(q) ||
       (usr.username && usr.username.toLowerCase().includes(q))
     );
-  }, [users, showMentionsList, mentionQuery]);
+  }, [mentionableUsers, showMentionsList, mentionQuery]);
 
   const filteredThreadMentionUsers = React.useMemo(() => {
     if (!showThreadMentionsList) return [];
-    if (!threadMentionQuery) return users;
+    if (!threadMentionQuery) return mentionableUsers;
     const q = threadMentionQuery.toLowerCase();
-    return users.filter(usr => 
-      usr.name.toLowerCase().includes(q) || 
+    return mentionableUsers.filter(usr =>
+      usr.name.toLowerCase().includes(q) ||
       (usr.username && usr.username.toLowerCase().includes(q))
     );
-  }, [users, showThreadMentionsList, threadMentionQuery]);
+  }, [mentionableUsers, showThreadMentionsList, threadMentionQuery]);
+
+  const mentionableChannels = React.useMemo(
+    () => channels.filter(channel => canAccessChannel(channel, currentUser, activeOrganizationId)),
+    [channels, currentUser, activeOrganizationId]
+  );
+
+  const filteredMentionChannels = React.useMemo(() => {
+    if (!showChannelMentionsList) return [];
+    const query = channelMentionQuery.toLowerCase();
+    return mentionableChannels.filter(channel => channel.name.toLowerCase().includes(query));
+  }, [mentionableChannels, showChannelMentionsList, channelMentionQuery]);
+
+  const filteredThreadMentionChannels = React.useMemo(() => {
+    if (!showThreadChannelMentionsList) return [];
+    const query = threadChannelMentionQuery.toLowerCase();
+    return mentionableChannels.filter(channel => channel.name.toLowerCase().includes(query));
+  }, [mentionableChannels, showThreadChannelMentionsList, threadChannelMentionQuery]);
 
   const handleDmTextChangeCursor = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const text = e.target.value;
@@ -122,20 +226,36 @@ export function DMsView({ userId }: { userId?: string }) {
     const selectionStart = e.target.selectionStart || 0;
     const textBeforeCursor = text.substring(0, selectionStart);
     const lastAtIndex = textBeforeCursor.lastIndexOf('@');
-    
-    if (lastAtIndex !== -1) {
-      const queryText = textBeforeCursor.substring(lastAtIndex + 1);
-      const isStartOfWord = lastAtIndex === 0 || /\s/.test(textBeforeCursor.charAt(lastAtIndex - 1));
+    const lastHashIndex = textBeforeCursor.lastIndexOf('#');
+    if (lastHashIndex > lastAtIndex && lastHashIndex !== -1) {
+      const queryText = textBeforeCursor.substring(lastHashIndex + 1);
+      const isStartOfWord = lastHashIndex === 0 || /\s/.test(textBeforeCursor.charAt(lastHashIndex - 1));
       if (!/\s/.test(queryText) && isStartOfWord) {
-        setShowMentionsList(true);
-        setMentionQuery(queryText);
+        setShowChannelMentionsList(true);
+        setChannelMentionQuery(queryText);
+        setShowMentionsList(false);
+        setMentionQuery('');
+      } else {
+        setShowChannelMentionsList(false);
+        setChannelMentionQuery('');
+      }
+    } else {
+      setShowChannelMentionsList(false);
+      setChannelMentionQuery('');
+      if (lastAtIndex !== -1) {
+        const queryText = textBeforeCursor.substring(lastAtIndex + 1);
+        const isStartOfWord = lastAtIndex === 0 || /\s/.test(textBeforeCursor.charAt(lastAtIndex - 1));
+        if (!/\s/.test(queryText) && isStartOfWord) {
+          setShowMentionsList(true);
+          setMentionQuery(queryText);
+        } else {
+          setShowMentionsList(false);
+          setMentionQuery('');
+        }
       } else {
         setShowMentionsList(false);
         setMentionQuery('');
       }
-    } else {
-      setShowMentionsList(false);
-      setMentionQuery('');
     }
   };
 
@@ -149,21 +269,61 @@ export function DMsView({ userId }: { userId?: string }) {
     const selectionStart = e.target.selectionStart || 0;
     const textBeforeCursor = text.substring(0, selectionStart);
     const lastAtIndex = textBeforeCursor.lastIndexOf('@');
-    
-    if (lastAtIndex !== -1) {
-      const queryText = textBeforeCursor.substring(lastAtIndex + 1);
-      const isStartOfWord = lastAtIndex === 0 || /\s/.test(textBeforeCursor.charAt(lastAtIndex - 1));
+    const lastHashIndex = textBeforeCursor.lastIndexOf('#');
+    if (lastHashIndex > lastAtIndex && lastHashIndex !== -1) {
+      const queryText = textBeforeCursor.substring(lastHashIndex + 1);
+      const isStartOfWord = lastHashIndex === 0 || /\s/.test(textBeforeCursor.charAt(lastHashIndex - 1));
       if (!/\s/.test(queryText) && isStartOfWord) {
-        setShowThreadMentionsList(true);
-        setThreadMentionQuery(queryText);
+        setShowThreadChannelMentionsList(true);
+        setThreadChannelMentionQuery(queryText);
+        setShowThreadMentionsList(false);
+        setThreadMentionQuery('');
+      } else {
+        setShowThreadChannelMentionsList(false);
+        setThreadChannelMentionQuery('');
+      }
+    } else {
+      setShowThreadChannelMentionsList(false);
+      setThreadChannelMentionQuery('');
+      if (lastAtIndex !== -1) {
+        const queryText = textBeforeCursor.substring(lastAtIndex + 1);
+        const isStartOfWord = lastAtIndex === 0 || /\s/.test(textBeforeCursor.charAt(lastAtIndex - 1));
+        if (!/\s/.test(queryText) && isStartOfWord) {
+          setShowThreadMentionsList(true);
+          setThreadMentionQuery(queryText);
+        } else {
+          setShowThreadMentionsList(false);
+          setThreadMentionQuery('');
+        }
       } else {
         setShowThreadMentionsList(false);
         setThreadMentionQuery('');
       }
-    } else {
-      setShowThreadMentionsList(false);
-      setThreadMentionQuery('');
     }
+  };
+
+  const openMentionPicker = (isThread: boolean = false) => {
+    const ref = isThread ? threadInputRef : dmInputRef;
+    if (!ref.current) return;
+    const currentText = isThread ? threadReply : dmText;
+    const cursor = ref.current.selectionStart || currentText.length;
+    const needsSpace = cursor > 0 && !/\s/.test(currentText.charAt(cursor - 1));
+    const insertedText = `${needsSpace ? ' ' : ''}@`;
+    const updatedText = currentText.slice(0, cursor) + insertedText + currentText.slice(cursor);
+    if (isThread) {
+      setThreadReply(updatedText);
+      setShowThreadMentionsList(true);
+      setThreadMentionQuery('');
+    } else {
+      handleDmTextChange(updatedText);
+      setShowMentionsList(true);
+      setMentionQuery('');
+    }
+    const newCursorPosition = cursor + insertedText.length;
+    setTimeout(() => {
+      ref.current?.focus();
+      ref.current?.setSelectionRange(newCursorPosition, newCursorPosition);
+    }, 0);
   };
 
   const handleMentionSelect = (username: string, isThread: boolean = false) => {
@@ -201,6 +361,34 @@ export function DMsView({ userId }: { userId?: string }) {
     }
   };
 
+  const handleChannelMentionSelect = (channelName: string, isThread: boolean = false) => {
+    const ref = isThread ? threadInputRef : dmInputRef;
+    if (!ref.current) return;
+    const start = ref.current.selectionStart || 0;
+    const currentText = isThread ? threadReply : dmText;
+    const textBeforeCursor = currentText.substring(0, start);
+    const textAfterCursor = currentText.substring(start);
+    const lastHashIndex = textBeforeCursor.lastIndexOf('#');
+    if (lastHashIndex === -1) return;
+
+    const updatedText = `${textBeforeCursor.substring(0, lastHashIndex)}#${channelName} ${textAfterCursor}`;
+    if (isThread) {
+      handleThreadReplyChange(updatedText);
+      setShowThreadChannelMentionsList(false);
+      setThreadChannelMentionQuery('');
+    } else {
+      handleDmTextChange(updatedText);
+      setShowChannelMentionsList(false);
+      setChannelMentionQuery('');
+    }
+
+    const newCursorPos = lastHashIndex + channelName.length + 2;
+    setTimeout(() => {
+      ref.current?.focus();
+      ref.current?.setSelectionRange(newCursorPos, newCursorPos);
+    }, 10);
+  };
+
   // Emojis and popups toggling
   const [showMainEmojiPicker, setShowMainEmojiPicker] = useState(false);
   const [showThreadEmojiPicker, setShowThreadEmojiPicker] = useState(false);
@@ -213,6 +401,17 @@ export function DMsView({ userId }: { userId?: string }) {
 
   const dmInputRef = useRef<HTMLTextAreaElement>(null);
   const threadInputRef = useRef<HTMLTextAreaElement>(null);
+  const dmMessagesContainerRef = useRef<HTMLDivElement>(null);
+  const dmThreadMessagesContainerRef = useRef<HTMLDivElement>(null);
+
+  const scrollToLatest = (containerRef: React.RefObject<HTMLDivElement>) => {
+    window.setTimeout(() => {
+      containerRef.current?.scrollTo({
+        top: containerRef.current.scrollHeight,
+        behavior: 'smooth'
+      });
+    }, 0);
+  };
 
   // Audio & Video Calling State
   const [activeCall, setActiveCall] = useState<{
@@ -583,28 +782,16 @@ export function DMsView({ userId }: { userId?: string }) {
     return defaultDMConversations;
   });
 
-  // Re-sync conversations from localStorage whenever selected user / userId changes
-  useEffect(() => {
-    const saved = localStorage.getItem('demo_conversations');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setConversations(prev => ({ ...defaultDMConversations, ...parsed }));
-      } catch (e) {
-        console.error(e);
-      }
-    }
-  }, [userId, selectedUser.id]);
 
   useEffect(() => {
     localStorage.setItem('demo_conversations', JSON.stringify(conversations));
   }, [conversations]);
 
   // Filter users by search
-  const filteredUsers = systemUsers.filter(u => 
+  const filteredUsers = systemUsers.filter(u => u.id !== currentUser?.id && (
     u.name.toLowerCase().includes(userSearch.toLowerCase()) || 
     u.role.toLowerCase().includes(userSearch.toLowerCase())
-  );
+  ));
 
   // Dynamic fallback generator if messages array is somehow empty for a user
   const getFallbackMessages = (usr: typeof systemUsers[0]): DMMessage[] => {
@@ -648,6 +835,24 @@ export function DMsView({ userId }: { userId?: string }) {
     : (defaultDMConversations[selectedUser.id] || getFallbackMessages(selectedUser));
 
   const activeThread = activeMessages.find(m => m.id === activeThreadId);
+  const activeMessagesScrollKey = activeMessages
+    .map(message => `${message.id}:${message.text}`)
+    .join('|');
+  const activeThreadRepliesScrollKey = activeThread
+    ? `${activeThread.id}:${activeThread.text}|${(activeThread.replies || [])
+      .map(reply => `${reply.id}:${reply.text}`)
+      .join('|')}`
+    : '';
+
+  useEffect(() => {
+    scrollToLatest(dmMessagesContainerRef);
+  }, [selectedUser.id, activeMessagesScrollKey]);
+
+  useEffect(() => {
+    if (activeThreadId && activeThread) {
+      scrollToLatest(dmThreadMessagesContainerRef);
+    }
+  }, [activeThreadId, activeThreadRepliesScrollKey]);
 
   useEffect(() => {
     if (activeThreadId) {
@@ -696,9 +901,130 @@ export function DMsView({ userId }: { userId?: string }) {
   };
 
   // Send primary DM
+  const buildDmConversationHistory = (agentId: string): AgentConversationMessage[] => {
+    const conversation = conversations[selectedUser.id] || [];
+    const flattened: Array<{ senderId: string; senderName: string; text: string }> = [];
+
+    conversation.forEach(message => {
+      flattened.push({ senderId: message.senderId, senderName: message.senderName, text: message.text });
+      (message.replies || []).forEach(reply => {
+        flattened.push({ senderId: reply.senderId, senderName: reply.senderName, text: reply.text });
+      });
+    });
+
+    return flattened.slice(-10).map(message => ({
+      role: message.senderId === agentId ? 'assistant' : 'user',
+      content: `${message.senderName}: ${message.text}`
+    }));
+  };
+
+  const respondAsAgent = (agentUser: typeof systemUsers[0], prompt: string, parentMessageId?: string) => {
+    const agent = agents.find(item => item.id === agentUser.id);
+    if (!agent || !agent.enabled) return;
+
+    if (agentStatusTimerRef.current) window.clearTimeout(agentStatusTimerRef.current);
+    agentRequestControllerRef.current?.abort();
+    const controller = new AbortController();
+    agentRequestControllerRef.current = controller;
+    const requestGeneration = agentRequestGenerationRef.current + 1;
+    agentRequestGenerationRef.current = requestGeneration;
+    const isCurrentRequest = () => agentRequestGenerationRef.current === requestGeneration && !controller.signal.aborted;
+    const placeholderId = `agent_placeholder_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const placeholderText = `🔎 ${agent.name} is searching workspace context…`;
+    const updatePlaceholder = (text: string) => {
+      if (!isCurrentRequest()) return;
+      setConversations(previous => ({
+        ...previous,
+        [agent.id]: (previous[agent.id] || []).map(message => parentMessageId === message.id
+          ? { ...message, replies: (message.replies || []).map(reply => reply.id === placeholderId ? { ...reply, text } : reply) }
+          : message.id === placeholderId ? { ...message, text } : message)
+      }));
+    };
+    const insertPlaceholder = () => {
+      setConversations(previous => {
+        const currentConversation = previous[agent.id] || [];
+        if (parentMessageId) {
+          return {
+            ...previous,
+            [agent.id]: currentConversation.map(message => message.id === parentMessageId
+              ? { ...message, replies: [...(message.replies || []), { id: placeholderId, senderId: agent.id, senderName: agent.name, text: placeholderText, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), reactions: [] }] }
+              : message)
+          };
+        }
+        return {
+          ...previous,
+          [agent.id]: [...currentConversation, {
+            id: placeholderId,
+            senderId: agent.id,
+            senderName: agent.name,
+            text: placeholderText,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            isMe: false,
+            reactions: [],
+            replies: []
+          }]
+        };
+      });
+    };
+    const replacePlaceholder = (text: string) => updatePlaceholder(text);
+
+    insertPlaceholder();
+    setAgentStatus('searching');
+    agentStatusTimerRef.current = window.setTimeout(() => {
+      if (!isCurrentRequest()) return;
+      setAgentStatus('thinking');
+      updatePlaceholder('💭 Thinking about your request…');
+      agentStatusTimerRef.current = window.setTimeout(() => {
+        if (!isCurrentRequest()) return;
+        setAgentStatus('checking');
+        updatePlaceholder(agent.databaseAccess?.webSearch ? '🌐 Checking workspace data and web search…' : '🧭 Checking allowed workspace data…');
+        agentStatusTimerRef.current = window.setTimeout(() => {
+          if (!isCurrentRequest()) return;
+          setAgentStatus('typing');
+          updatePlaceholder('⌨️ Typing…');
+          agentStatusTimerRef.current = window.setTimeout(() => {
+            if (!isCurrentRequest()) return;
+            const scope = [
+              agent.databaseAccess?.organizations ? 'organization data' : null,
+              agent.databaseAccess?.publicThreads ? 'public threads' : null,
+              agent.databaseAccess?.webSearch ? 'web search when applicable' : null
+            ].filter(Boolean).join(' and ') || 'no workspace data';
+            const fallback = `I’m here to help with ${String(agent.jobDetails || '').toLowerCase()}\n\nI reviewed the available ${scope}. Regarding your message: “${prompt}”\n\n${String(agent.personality || '')}`;
+            let workspaceContext = 'No workspace data is available to this agent.';
+            try {
+              workspaceContext = buildAgentWorkspaceContext(agent, messages, channels, organizations, users, userStatus, currentUser?.id || '', activeOrganizationId, prompt);
+            } catch {
+              // Use the fallback context if persisted workspace data is malformed.
+            }
+            const conversationHistory = buildDmConversationHistory(agent.id);
+            void requestAgentReply(agent, prompt, workspaceContext, fallback, conversationHistory, controller.signal).then(text => {
+              if (!isCurrentRequest()) return;
+              replacePlaceholder(text);
+              setAgentStatus(null);
+              agentRequestControllerRef.current = null;
+            }).catch(error => {
+              if (error instanceof DOMException && error.name === 'AbortError') return;
+              if (!isCurrentRequest()) return;
+              replacePlaceholder('⚠️ I could not complete that request. Please try again.');
+              setAgentStatus(null);
+              agentRequestControllerRef.current = null;
+            });
+          }, 650);
+        }, 500);
+      }, 450);
+    }, 300);
+  };
+
+  useEffect(() => () => {
+    if (agentStatusTimerRef.current) window.clearTimeout(agentStatusTimerRef.current);
+    agentRequestControllerRef.current?.abort();
+    agentRequestGenerationRef.current += 1;
+  }, []);
+
   const handleSendMessage = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!dmText.trim()) return;
+    const outgoingText = dmText.trim();
 
     const newMsg: DMMessage = {
       id: `new_dm_${Date.now()}`,
@@ -715,6 +1041,10 @@ export function DMsView({ userId }: { userId?: string }) {
       ...prev,
       [selectedUser.id]: [...(prev[selectedUser.id] || []), newMsg]
     }));
+
+    if (selectedUser.isAgent) {
+      respondAsAgent(selectedUser, outgoingText);
+    }
     
     // Clear typing and draft
     setDmText('');
@@ -752,6 +1082,10 @@ export function DMsView({ userId }: { userId?: string }) {
         [selectedUser.id]: updated
       };
     });
+
+    if (selectedUser.isAgent) {
+      respondAsAgent(selectedUser, threadReply, activeThreadId);
+    }
 
     setThreadReply('');
     setThreadDrafts(prev => ({ ...prev, [activeThreadId]: '' }));
@@ -840,7 +1174,7 @@ export function DMsView({ userId }: { userId?: string }) {
               >
                 <div className="flex items-center space-x-3">
                   <div className="w-9 h-9 rounded-md bg-[#2A2B32] font-mono font-bold flex items-center justify-center text-blue-400 border border-gray-700 shrink-0 relative">
-                    <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${user.name}&backgroundColor=b6e3f4`} alt="" className="w-full h-full rounded" />
+                    <UserAvatar user={user} className="w-full h-full rounded object-cover" alt={user.name} />
                     {user.online && (
                       <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 rounded-full border-2 border-[#121317]"></div>
                     )}
@@ -848,7 +1182,7 @@ export function DMsView({ userId }: { userId?: string }) {
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-center mb-0.5">
                       <span className="text-xs truncate text-gray-200">
-                        {user.name} {user.name === 'Abdallah Sayed' && '(you)'}
+                        <DisplayName name={user.name} isAgent={user.isAgent} /> {user.name === 'Abdallah Sayed' && '(you)'}
                       </span>
                       {user.unread > 0 && !isSel && (
                         <span className="bg-red-500 text-[#121317] text-[9px] font-bold px-1.5 py-0.5 rounded-full shrink-0">
@@ -879,16 +1213,19 @@ export function DMsView({ userId }: { userId?: string }) {
               <ArrowLeft className="h-5 w-5" />
             </button>
             <div className="w-9 h-9 rounded bg-[#2A2B32] border border-gray-700 relative overflow-hidden shrink-0">
-              <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${selectedUser.name}&backgroundColor=b6e3f4`} alt="" />
+              <UserAvatar user={selectedUser} className="h-full w-full object-cover" alt={selectedUser.name} />
               {selectedUser.online && (
                 <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-green-500 rounded-full border border-[#121317]"></div>
               )}
             </div>
             <div className="min-w-0">
-              <h3 className="font-bold text-gray-100 text-sm truncate">{selectedUser.name}</h3>
+              <h3 className="font-bold text-gray-100 text-sm truncate"><DisplayName name={selectedUser.name} isAgent={selectedUser.isAgent} /></h3>
               <p className="text-[10px] text-emerald-400 flex items-center gap-1 leading-none mt-0.5 truncate">
                 {selectedUser.online ? 'Active now' : `Last seen ${selectedUser.lastSeen}`} • {selectedUser.role}
               </p>
+              {selectedUser.isAgent && agentStatus && (
+                <p className="text-[10px] text-violet-300 flex items-center gap-1 mt-1 animate-pulse"><Bot className="h-3 w-3" /> {agentStatus === 'searching' ? 'Searching…' : agentStatus === 'thinking' ? 'Thinking…' : agentStatus === 'checking' ? 'Checking workspace context…' : 'Typing…'}</p>
+              )}
             </div>
           </div>
           <div className="flex items-center space-x-2 text-gray-400">
@@ -914,12 +1251,13 @@ export function DMsView({ userId }: { userId?: string }) {
         </div>
 
         {/* Messaging History */}
-        <div className="flex-1 p-6 overflow-y-auto space-y-4 bg-[#1A1D21] custom-scrollbar">
+        <div ref={dmMessagesContainerRef} className="flex-1 p-6 overflow-y-auto space-y-4 bg-[#1A1D21] custom-scrollbar">
           <div className="flex justify-center mb-6">
             <span className="text-[10px] text-gray-400 font-mono bg-gray-950/40 border border-gray-800/80 px-3 py-1 rounded-full">
               SECURE DIRECT CONVERSATION WITH {selectedUser.name.toUpperCase()}
             </span>
           </div>
+
 
           {activeMessages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center text-gray-500 py-20">
@@ -936,12 +1274,12 @@ export function DMsView({ userId }: { userId?: string }) {
               >
                 {/* User logo */}
                 <div className="w-8 h-8 rounded bg-[#2A2B32] border border-gray-800 overflow-hidden shrink-0 mt-0.5">
-                  <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${msg.isMe ? currentUser?.name || 'Abdallah Sayed' : selectedUser.name}&backgroundColor=b6e3f4`} alt="" />
+                  <UserAvatar user={msg.isMe ? currentUser : selectedUser} fallbackName={msg.isMe ? 'Abdallah Sayed' : selectedUser.name} className="h-full w-full object-cover" alt={msg.isMe ? currentUser?.name || 'You' : selectedUser.name} />
                 </div>
 
                 <div className="max-w-[70%] min-w-0">
                   <div className={`flex items-baseline space-x-1.5 ${msg.isMe ? 'flex-row-reverse space-x-reverse' : ''}`}>
-                    <span className="font-bold text-gray-200 text-xs">{msg.isMe ? 'You' : msg.senderName}</span>
+                    <span className="font-bold text-gray-200 text-xs"><DisplayName name={msg.isMe ? 'You' : msg.senderName} isAgent={!msg.isMe && selectedUser.isAgent} /></span>
                     <span className="text-[9px] text-gray-500 font-mono">{msg.timestamp}</span>
                   </div>
 
@@ -974,7 +1312,7 @@ export function DMsView({ userId }: { userId?: string }) {
                       <div className="flex -space-x-1 mr-1.5">
                         {msg.replies.slice(0, 3).map((r, i) => (
                           <div key={i} className="h-4.5 w-4.5 rounded-full overflow-hidden border border-[#1A1D21] bg-gray-600 shrink-0">
-                             <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${r.senderName}&backgroundColor=b6e3f4`} alt="" />
+                             <UserAvatar user={users.find(user => user.id === r.senderId)} fallbackName={r.senderName} className="h-full w-full object-cover" alt={r.senderName} />
                           </div>
                         ))}
                       </div>
@@ -1039,9 +1377,28 @@ export function DMsView({ userId }: { userId?: string }) {
 
         {/* Input area styled with parity */}
         <div className="p-4 bg-[#121317] border-t border-gray-800 shrink-0">
-          <div className="bg-[#1A1D21] rounded-lg border border-gray-800/80 focus-within:border-gray-500 transition-colors flex flex-col relative w-full overflow-hidden shadow-sm">
+          <div className="bg-[#1A1D21] rounded-lg border border-gray-800/80 focus-within:border-gray-500 transition-colors flex flex-col relative w-full shadow-sm">
+            {/* DM Autocomplete Channel Mentions Select Overlay Popup */}
+            {showChannelMentionsList && (
+              <div className="absolute bottom-full left-3 mb-2 w-64 bg-[#121317] border border-gray-800 rounded-xl shadow-2xl z-[60] overflow-hidden select-none animate-fade-in-up">
+                <div className="px-3.5 py-1.5 text-[9px] text-gray-500 font-bold uppercase border-b border-gray-850 tracking-wider flex items-center justify-between">
+                  <span>Mention Channel</span>
+                  {channelMentionQuery && <span className="text-[8px] font-mono lowercase bg-gray-800 px-1 py-0.2 rounded text-gray-400">#{channelMentionQuery}</span>}
+                </div>
+                <div className="max-h-48 overflow-y-auto divide-y divide-gray-850/30">
+                  {filteredMentionChannels.map(channel => (
+                    <button key={channel.id} type="button" onClick={() => handleChannelMentionSelect(channel.name)} className="w-full text-left px-3.5 py-2 hover:bg-gray-800 text-xs text-gray-200 hover:text-white flex items-center space-x-2.5 transition-colors cursor-pointer">
+                      {channel.isPrivate ? <Lock className="h-4 w-4 text-amber-400 shrink-0" /> : <Hash className="h-4 w-4 text-blue-400 shrink-0" />}
+                      <span className="font-semibold truncate">#{channel.name}</span>
+                    </button>
+                  ))}
+                  {filteredMentionChannels.length === 0 && <div className="px-3.5 py-3 text-xs text-gray-500">No accessible channels found</div>}
+                </div>
+              </div>
+            )}
+
             {/* DM Autocomplete User Mentions Select Overlay Popup */}
-            {showMentionsList && filteredMentionUsers.length > 0 && (
+            {showMentionsList && (
               <div className="absolute bottom-full left-3 mb-2 w-64 bg-[#121317] border border-gray-800 rounded-xl shadow-2xl z-50 overflow-hidden select-none animate-fade-in-up">
                 <div className="px-3.5 py-1.5 text-[9px] text-gray-500 font-bold uppercase border-b border-gray-850 tracking-wider flex items-center justify-between">
                   <span>Mention Team Member</span>
@@ -1057,12 +1414,12 @@ export function DMsView({ userId }: { userId?: string }) {
                       onClick={() => handleMentionSelect(usr.username || usr.name, false)}
                       className="w-full text-left px-3 py-2 hover:bg-gray-805 text-xs text-gray-200 hover:text-white flex items-center space-x-2.5 transition-colors cursor-pointer"
                     >
-                      <img className="h-5 w-5 rounded-full object-cover bg-gray-700 shrink-0" src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${usr.name.replace(/\s+/g, '')}`} alt="" referrerPolicy="no-referrer" />
+                      <UserAvatar user={usr} className="h-5 w-5 rounded-full object-cover bg-gray-700 shrink-0" alt={usr.name} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between">
                           <span className="font-semibold truncate text-gray-200 hover:text-white flex items-center gap-1.5">
                             <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${usr.role === 'Super Admin' || usr.id === '8' ? 'bg-emerald-500' : 'bg-gray-600'}`}></span>
-                            {usr.name}
+                            <DisplayName name={usr.name} isAgent={usr.isAgent} />
                           </span>
                           {usr.username && (
                             <span className="text-[10px] text-gray-400 font-mono shrink-0">@{usr.username}</span>
@@ -1138,7 +1495,7 @@ export function DMsView({ userId }: { userId?: string }) {
                   {/* Mention selector button */}
                   <button 
                     type="button" 
-                    onClick={() => setShowMentionsList(!showMentionsList)}
+                    onClick={() => openMentionPicker(false)}
                     className={`p-1.5 rounded cursor-pointer transition ${showMentionsList ? 'bg-blue-600/10 text-blue-400 font-bold' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-850'}`}
                     title="Mention team member"
                   >
@@ -1178,15 +1535,15 @@ export function DMsView({ userId }: { userId?: string }) {
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+          <div ref={dmThreadMessagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
             {/* Original message inside thread */}
             <div className="relative group flex items-start space-x-3 border-b border-gray-850 pb-4 hover:bg-[#2A2B32]/10 p-2 -mx-2 rounded transition-colors">
               <div className="h-7.5 w-7.5 rounded overflow-hidden bg-[#2A2B32] border border-gray-800 shrink-0">
-                <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${activeThread.isMe ? currentUser?.name || 'Abdallah Sayed' : selectedUser.name}&backgroundColor=b6e3f4`} alt="" />
+                <UserAvatar user={activeThread.isMe ? currentUser : selectedUser} fallbackName={activeThread.isMe ? 'Abdallah Sayed' : selectedUser.name} className="h-full w-full object-cover" alt={activeThread.isMe ? currentUser?.name || 'You' : selectedUser.name} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-baseline mb-0.5">
-                  <span className="font-bold text-gray-200 text-xs">{activeThread.isMe ? 'You' : activeThread.senderName}</span>
+                  <span className="font-bold text-gray-200 text-xs"><DisplayName name={activeThread.isMe ? 'You' : activeThread.senderName} isAgent={!activeThread.isMe && selectedUser.isAgent} /></span>
                   <span className="text-[9px] text-gray-500 ml-2 font-mono">{activeThread.timestamp}</span>
                 </div>
                 <div className="text-xs text-gray-300 leading-relaxed"><FormattedMessage text={activeThread.text} /></div>
@@ -1222,11 +1579,11 @@ export function DMsView({ userId }: { userId?: string }) {
               return (
                 <div key={reply.id} className="relative group flex items-start space-x-2.5 hover:bg-[#2A2B32]/10 p-2 -mx-2 rounded transition-colors mt-2">
                   <div className="h-7 w-7 rounded overflow-hidden bg-[#2A2B32] border border-gray-800 shrink-0">
-                    <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${isReplyMe ? currentUser?.name || 'Abdallah Sayed' : selectedUser.name}&backgroundColor=b6e3f4`} alt="" />
+                    <UserAvatar user={isReplyMe ? currentUser : selectedUser} fallbackName={isReplyMe ? 'Abdallah Sayed' : selectedUser.name} className="h-full w-full object-cover" alt={isReplyMe ? currentUser?.name || 'You' : selectedUser.name} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline mb-0.5">
-                      <span className="font-bold text-gray-200 text-[11px]">{isReplyMe ? 'You' : reply.senderName}</span>
+                      <span className="font-bold text-gray-200 text-[11px]"><DisplayName name={isReplyMe ? 'You' : reply.senderName} isAgent={!isReplyMe && selectedUser.isAgent} /></span>
                       <span className="text-[8px] text-gray-500 ml-2 font-mono">{reply.timestamp}</span>
                     </div>
                     <div className="text-[11px] text-gray-300 leading-relaxed"><FormattedMessage text={reply.text} /></div>
@@ -1267,9 +1624,28 @@ export function DMsView({ userId }: { userId?: string }) {
           </div>
 
           {/* Reply input styled beautifully inside the thread */}
-          <div className="m-3 bg-[#1A1D21] border border-gray-800 rounded-lg overflow-hidden flex flex-col focus-within:border-gray-500 shrink-0 shadow-lg relative">
+          <div className="m-3 bg-[#1A1D21] border border-gray-800 rounded-lg flex flex-col focus-within:border-gray-500 shrink-0 shadow-lg relative">
+            {/* Thread Autocomplete Channel Mentions Select Overlay Popup */}
+            {showThreadChannelMentionsList && (
+              <div className="absolute bottom-full left-3 mb-2 w-64 bg-[#121317] border border-gray-800 rounded-xl shadow-2xl z-[60] overflow-hidden select-none animate-fade-in-up">
+                <div className="px-3 py-1 text-[9px] text-gray-500 font-bold uppercase border-b border-gray-850 tracking-wider flex items-center justify-between">
+                  <span>Mention Channel</span>
+                  {threadChannelMentionQuery && <span className="text-[8px] font-mono lowercase bg-gray-800 px-1 py-0.2 rounded text-gray-400">#{threadChannelMentionQuery}</span>}
+                </div>
+                <div className="max-h-40 overflow-y-auto divide-y divide-gray-850/30">
+                  {filteredThreadMentionChannels.map(channel => (
+                    <button key={channel.id} type="button" onClick={() => handleChannelMentionSelect(channel.name, true)} className="w-full text-left px-3 py-1.5 hover:bg-gray-800 text-xs text-gray-200 hover:text-white flex items-center space-x-2 transition-colors cursor-pointer">
+                      {channel.isPrivate ? <Lock className="h-4 w-4 text-amber-400 shrink-0" /> : <Hash className="h-4 w-4 text-blue-400 shrink-0" />}
+                      <span className="font-semibold truncate">#{channel.name}</span>
+                    </button>
+                  ))}
+                  {filteredThreadMentionChannels.length === 0 && <div className="px-3 py-3 text-xs text-gray-500">No accessible channels found</div>}
+                </div>
+              </div>
+            )}
+
             {/* Thread Autocomplete User Mentions Select Overlay Popup */}
-            {showThreadMentionsList && filteredThreadMentionUsers.length > 0 && (
+            {showThreadMentionsList && (
               <div className="absolute bottom-full left-3 mb-2 w-64 bg-[#121317] border border-gray-800 rounded-xl shadow-2xl z-50 overflow-hidden select-none animate-fade-in-up">
                 <div className="px-3 py-1 text-[9px] text-gray-500 font-bold uppercase border-b border-gray-850 tracking-wider flex items-center justify-between">
                   <span>Mention Team Member</span>
@@ -1285,12 +1661,12 @@ export function DMsView({ userId }: { userId?: string }) {
                       onClick={() => handleMentionSelect(usr.username || usr.name, true)}
                       className="w-full text-left px-3 py-1.5 hover:bg-gray-805 text-xs text-gray-200 hover:text-white flex items-center space-x-2 transition-colors cursor-pointer"
                     >
-                      <img className="h-4.5 w-4.5 rounded-full object-cover bg-gray-700 shrink-0" src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${usr.name.replace(/\s+/g, '')}`} alt="" referrerPolicy="no-referrer" />
+                      <UserAvatar user={usr} className="h-4.5 w-4.5 rounded-full object-cover bg-gray-700 shrink-0" alt={usr.name} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between">
                           <span className="font-semibold truncate text-[11px] text-gray-200 hover:text-white flex items-center gap-1">
                             <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${usr.role === 'Super Admin' || usr.id === '8' ? 'bg-emerald-500' : 'bg-gray-600'}`}></span>
-                            {usr.name}
+                            <DisplayName name={usr.name} isAgent={usr.isAgent} />
                           </span>
                           {usr.username && (
                             <span className="text-[9px] text-gray-400 font-mono shrink-0">@{usr.username}</span>
@@ -1358,7 +1734,7 @@ export function DMsView({ userId }: { userId?: string }) {
                    {/* Thread @ trigger button */}
                    <button 
                      type="button" 
-                     onClick={() => setShowThreadMentionsList(!showThreadMentionsList)}
+                     onClick={() => openMentionPicker(true)}
                      className={`p-1 rounded cursor-pointer transition ${showThreadMentionsList ? 'bg-blue-600/10 text-blue-400 font-bold' : 'text-gray-400 hover:text-gray-200'}`}
                      title="Mention team member"
                    >
@@ -1391,7 +1767,7 @@ export function DMsView({ userId }: { userId?: string }) {
               <div className="flex items-center space-x-3">
                 <div className="relative">
                   <div className="w-10 h-10 rounded-full bg-gray-800 border border-gray-700 overflow-hidden">
-                    <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${activeCall.user.name}&backgroundColor=b6e3f4`} alt="" className="w-full h-full" />
+                    <UserAvatar user={activeCall.user} className="w-full h-full object-cover" alt={activeCall.user.name} />
                   </div>
                   <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-[#121317]"></div>
                 </div>
@@ -1432,7 +1808,7 @@ export function DMsView({ userId }: { userId?: string }) {
                   {(!mediaStream || !mediaStream.getVideoTracks().some(t => t.enabled)) && (
                     <div className="absolute inset-0 bg-[#121317] flex flex-col items-center justify-center text-center p-6">
                       <div className="w-24 h-24 rounded-full bg-blue-600/20 border-2 border-blue-500 flex items-center justify-center mb-4 relative">
-                        <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${activeCall.user.name}&backgroundColor=b6e3f4`} alt="" className="w-20 h-20 rounded-full" />
+                        <UserAvatar user={activeCall.user} className="w-20 h-20 rounded-full object-cover" alt={activeCall.user.name} />
                         <div className="absolute inset-0 rounded-full border-2 border-blue-400/40 animate-ping pointer-events-none"></div>
                       </div>
                       <h4 className="text-white font-bold text-base">{activeCall.user.name}</h4>
@@ -1442,7 +1818,7 @@ export function DMsView({ userId }: { userId?: string }) {
 
                   {/* Self PIP overlay */}
                   <div className="absolute bottom-4 right-4 w-36 h-24 bg-gray-900/90 border border-gray-700 rounded-lg overflow-hidden shadow-2xl flex flex-col items-center justify-center">
-                    <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${currentUser?.name || 'Abdallah Sayed'}&backgroundColor=b6e3f4`} alt="" className="w-10 h-10 rounded-full mb-1" />
+                    <UserAvatar user={currentUser} fallbackName="Abdallah Sayed" className="w-10 h-10 rounded-full object-cover mb-1" alt={currentUser?.name || 'You'} />
                     <span className="text-[9px] font-bold text-gray-300">You (Local)</span>
                   </div>
                 </div>
@@ -1452,7 +1828,7 @@ export function DMsView({ userId }: { userId?: string }) {
                   <div className="relative mb-6">
                     <div className="absolute -inset-4 bg-emerald-500/20 rounded-full blur-xl animate-pulse"></div>
                     <div className="w-28 h-28 rounded-full bg-[#1A1D21] border-2 border-emerald-500 flex items-center justify-center relative z-10 shadow-2xl overflow-hidden">
-                      <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${activeCall.user.name}&backgroundColor=b6e3f4`} alt="" className="w-24 h-24 rounded-full" />
+                      <UserAvatar user={activeCall.user} className="w-24 h-24 rounded-full object-cover" alt={activeCall.user.name} />
                     </div>
                   </div>
 

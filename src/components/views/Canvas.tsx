@@ -4,7 +4,7 @@ import {
   X, Send, User, FileText, Clock, Edit3, Save, Check, Paperclip, Sparkles, BookOpen,
   CornerDownRight, Zap, Reply
 } from 'lucide-react';
-import { useWorkspace } from '../../context';
+import { canAccessChannel, useWorkspace } from '../../context';
 
 export interface CanvasTaskComment {
   id: string;
@@ -167,7 +167,8 @@ const defaultCanvasCards: CanvasCard[] = [
 ];
 
 export function CanvasView() {
-  const { channels, users } = useWorkspace();
+  const { channels, users, currentUser, activeOrganizationId } = useWorkspace();
+  const visibleChannels = channels.filter(channel => canAccessChannel(channel, currentUser, activeOrganizationId));
   const [cards, setCards] = useState<CanvasCard[]>([]);
   const [newTitle, setNewTitle] = useState('');
   const [selectedChannelId, setSelectedChannelId] = useState<string>('');
@@ -560,7 +561,7 @@ export function CanvasView() {
                   className="w-full bg-[#121317] border border-gray-800 rounded-lg px-2 py-2 text-xs text-gray-200 focus:outline-none focus:border-emerald-500 cursor-pointer"
                 >
                   <option value="" className="bg-[#121317]">Global (No Channel Bind)</option>
-                  {channels.map(c => (
+                  {visibleChannels.map(c => (
                     <option key={c.id} value={c.id} className="bg-[#121317]">{c.name}</option>
                   ))}
                 </select>

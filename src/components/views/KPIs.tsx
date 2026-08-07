@@ -648,7 +648,7 @@ ${employeeNotes[user.id] || data.notes || 'No notes provided.'}
 
                   <div className="text-[11px] text-gray-400 flex items-center space-x-1">
                     <FileText className="h-3.5 w-3.5 text-blue-400" />
-                    <span>Formatted for Slack / VChat markdown reporting</span>
+                    <span>Formatted for DeskFlow / VChat markdown reporting</span>
                   </div>
                 </div>
               </div>

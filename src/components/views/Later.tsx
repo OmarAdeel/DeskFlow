@@ -1,12 +1,14 @@
 import React, { useState, useRef } from 'react';
-import { useWorkspace } from '../../context';
-import { Bookmark, Hash, Lock, Check, MessageSquare, Plus, Type, Smile, AtSign, MoreHorizontal, Send, ChevronDown, SmilePlus, Forward, MoreVertical } from 'lucide-react';
+import { canAccessChannel, useWorkspace } from '../../context';
+import { Bookmark, Star, Hash, Lock, Check, MessageSquare, Plus, Type, Smile, AtSign, MoreHorizontal, Send, ChevronDown, SmilePlus, Forward, MoreVertical } from 'lucide-react';
 import { MessageActions } from '../MessageActions';
 import { MessageReactions } from '../MessageReactions';
 import { FormattedMessage } from '../FormattedMessage';
+import { UserAvatar } from '../UserAvatar';
 
-export function LaterView({ onNavigate }: { onNavigate: any }) {
-  const { savedItems, messages, channels, users } = useWorkspace();
+export function LaterView({ onNavigate, title = 'Later' }: { onNavigate: any; title?: string }) {
+  const { savedItems, messages, channels, users, currentUser, activeOrganizationId } = useWorkspace();
+  const isStarred = title === 'Starred';
   const [activeReplyId, setActiveReplyId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
   const replyInputRef = useRef<HTMLTextAreaElement>(null);
@@ -17,7 +19,15 @@ export function LaterView({ onNavigate }: { onNavigate: any }) {
   // Find saved replies recursively (just mapping from messages for now as we only have 1 level)
   const savedReplies = messages.flatMap(msg => msg.replies.filter(reply => savedItems.includes(reply.id)));
   
-  const allSaved = [...savedMessages, ...savedReplies].sort((a, b) => b.timestamp - a.timestamp);
+  const allSaved = [...savedMessages, ...savedReplies]
+    .filter(item => {
+      const channelId = 'channelId' in item
+        ? item.channelId
+        : messages.find(message => message.replies.some(reply => reply.id === item.id))?.channelId;
+      const channel = channels.find(candidate => candidate.id === channelId);
+      return Boolean(channel && canAccessChannel(channel, currentUser, activeOrganizationId));
+    })
+    .sort((a, b) => b.timestamp - a.timestamp);
 
   const getContextInfo = (item: any) => {
     // Determine if it's a message or reply
@@ -38,15 +48,15 @@ export function LaterView({ onNavigate }: { onNavigate: any }) {
     <div className="flex h-full bg-[#1A1D21] text-gray-300">
       <div className="flex flex-col flex-1 min-w-0">
         <div className="flex items-center px-6 py-4 border-b border-gray-800 bg-[#121317]">
-          <Bookmark className="h-5 w-5 mr-3 text-blue-400" />
-          <h2 className="text-xl font-bold text-gray-100">Later</h2>
+          {isStarred ? <Star className="h-5 w-5 mr-3 text-yellow-400 fill-yellow-400" /> : <Bookmark className="h-5 w-5 mr-3 text-blue-400" />}
+          <h2 className="text-xl font-bold text-gray-100">{title}</h2>
         </div>
 
         <div className="flex-1 overflow-y-auto p-6">
           {allSaved.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-gray-500">
-              <Bookmark className="h-12 w-12 mb-4 opacity-50" />
-              <p>You don't have any items saved for later.</p>
+              {isStarred ? <Star className="h-12 w-12 mb-4 opacity-50" /> : <Bookmark className="h-12 w-12 mb-4 opacity-50" />}
+              <p>{isStarred ? 'You have not starred any messages or thread replies yet.' : "You don't have any items saved for later."}</p>
             </div>
           ) : (
             <div className="space-y-6 w-full max-w-3xl">
@@ -71,7 +81,7 @@ export function LaterView({ onNavigate }: { onNavigate: any }) {
                      <div className="p-4 relative group">
                         <div className="flex">
                            <div className="h-10 w-10 bg-gray-700 rounded mr-4 shrink-0 overflow-hidden">
-                             <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${sender?.name}&backgroundColor=b6e3f4`} alt={sender?.name} />
+                             <UserAvatar user={sender} className="h-full w-full object-cover" alt={sender?.name || 'User'} />
                            </div>
                            <div className="flex-1 min-w-0">
                              <div className="flex items-baseline mb-1">

@@ -65,7 +65,7 @@ export function AIDigestView() {
             <p className="text-xs text-gray-400 mt-1">
               {isArabic
                 ? 'مساعد الذكاء الاصطناعي الذكي لتلخيص القنوات والمحادثات المترابطة والإجابة عن أي تساؤل في مساحة العمل.'
-                : 'Smart Slack AI Assistant to summarize channel unreads, thread discussions, and answer workspace queries.'
+                : 'Smart DeskFlow AI Assistant to summarize channel unreads, thread discussions, and answer workspace queries.'
               }
             </p>
           </div>
@@ -77,7 +77,7 @@ export function AIDigestView() {
             type="text"
             value={aiPrompt}
             onChange={(e) => setAiPrompt(e.target.value)}
-            placeholder={isArabic ? 'اسأل الذكاء الاصطناعي أي سؤال عن مساحة العمل... (مثال: ما هي أهم قرارات الاجتماع الأخير؟)' : 'Ask Slack AI anything about your workspace channels...'}
+            placeholder={isArabic ? 'اسأل الذكاء الاصطناعي أي سؤال عن مساحة العمل... (مثال: ما هي أهم قرارات الاجتماع الأخير؟)' : 'Ask DeskFlow AI anything about your workspace channels...'}
             className="w-full px-4 py-3 bg-[#14161B] border border-gray-700 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-amber-500 transition shadow-inner"
           />
           <button
@@ -97,7 +97,7 @@ export function AIDigestView() {
           <div className="bg-gradient-to-r from-amber-500/10 to-amber-900/10 p-4 rounded-xl border border-amber-500/30 space-y-2 animate-in fade-in duration-300">
             <div className="flex items-center space-x-2 rtl:space-x-reverse text-amber-400 font-bold text-xs">
               <Bot className="h-4 w-4" />
-              <span>{isArabic ? 'إجابة مساعد Slack AI:' : 'Slack AI Response:'}</span>
+              <span>{isArabic ? 'إجابة مساعد DeskFlow AI:' : 'DeskFlow AI Response:'}</span>
             </div>
             <p className="text-xs text-gray-200 leading-relaxed">{customResponse}</p>
           </div>
