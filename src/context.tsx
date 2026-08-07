@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, ReactNode, useEffect, useRef } from 'react';
+import type { User } from '@supabase/supabase-js';
 import { announceRecordingStatus } from './utils/audioAnnounce';
+import { supabase } from './lib/supabase';
 
 export interface Channel {
   id: string;
@@ -159,13 +161,14 @@ interface WorkspaceContextProps {
   agents: WorkspaceAgent[];
   setAgents: React.Dispatch<React.SetStateAction<WorkspaceAgent[]>>;
   messages: Message[];
-  setMessages: (messages: Message[]) => void;
+  setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
   drafts: Draft[];
   setDrafts: (drafts: Draft[]) => void;
   savedItems: string[];
   setSavedItems: React.Dispatch<React.SetStateAction<string[]>>;
   currentUser: WorkspaceUser | undefined;
   isAuthenticated: boolean;
+  isPasswordRecovery: boolean;
   login: (email: string, password: string) => Promise<string | null>;
   logout: () => void;
   changeCurrentUserPassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
@@ -215,101 +218,32 @@ const defaultUsers: WorkspaceUser[] = [
   { id: '1', name: 'John Doe', email: 'john.doe@democompany.com', role: 'Member', title: 'Developer', phone: '+1234567890', channelIds: ['4'], username: 'john.doe' }
 ];
 
-type PasswordCredential = { userId: string; passwordHash: string };
-type PasswordResetToken = { userId: string; expiresAt: number; used: boolean };
-
-const defaultPasswordHash = 'd3ad9315b7be5dd53b31a273b3b3aba5defe700808305aa16a3062b76658a791';
-
-async function hashPassword(password: string): Promise<string> {
-  const data = new TextEncoder().encode(password);
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
 function passwordMeetsRequirements(password: string): boolean {
   return password.length >= 8;
 }
 
 export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return localStorage.getItem('workspace_authenticated') !== 'false';
-  });
+  useEffect(() => {
+    ['workspace_channels', 'workspace_users', 'workspace_messages', 'workspace_organizations', 'workspace_savedItems', 'workspace_password_credentials', 'workspace_password_reset_tokens']
+      .forEach(key => localStorage.removeItem(key));
+  }, []);
 
-  const [authenticatedUserId, setAuthenticatedUserId] = useState(() => {
-    return localStorage.getItem('workspace_authenticated_user') || '8';
-  });
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(() => new URLSearchParams(window.location.hash.replace(/^#/, '')).get('type') === 'recovery');
+  const [authenticatedUserId, setAuthenticatedUserId] = useState<string | null>(null);
+  const [isSupabaseHydrated, setIsSupabaseHydrated] = useState(false);
+  const hydrationGenerationRef = useRef(0);
 
   const [workspaceName, setWorkspaceName] = useState(() => {
     return localStorage.getItem('workspace_name') || 'Demo Company';
   });
   
-  const [channels, setChannels] = useState<Channel[]>(() => {
-    const saved = localStorage.getItem('workspace_channels');
-    if (!saved) return defaultChannels;
-    try {
-      const parsed = JSON.parse(saved);
-      return Array.isArray(parsed) ? parsed : defaultChannels;
-    } catch {
-      return defaultChannels;
-    }
-  });
+  const [channels, setChannelsState] = useState<Channel[]>(defaultChannels);
 
-  const [users, setUsers] = useState<WorkspaceUser[]>(() => {
-    const saved = localStorage.getItem('workspace_users');
-    if (saved) {
-      const parsed = JSON.parse(saved) as WorkspaceUser[];
-      // Sync default user fields (like username) only for users who are still in the saved list (not deleted)
-      return parsed.map(u => {
-        const du = defaultUsers.find(d => d.id === u.id);
-        if (du) {
-          return { ...du, ...u, username: du.username || u.username };
-        }
-        return u;
-      });
-    }
-    return defaultUsers;
-  });
+  const [users, setUsers] = useState<WorkspaceUser[]>(defaultUsers);
 
-  const [passwordCredentials, setPasswordCredentials] = useState<PasswordCredential[]>(() => {
-    const saved = localStorage.getItem('workspace_password_credentials');
-    let parsed: PasswordCredential[] = [];
-    if (saved) {
-      try {
-        const value = JSON.parse(saved);
-        parsed = Array.isArray(value) ? value.filter(item => item && typeof item.userId === 'string' && typeof item.passwordHash === 'string') : [];
-      } catch {
-        parsed = [];
-      }
-    }
-    // Existing demo accounts can sign in with demo123 until they change their password.
-    return defaultUsers.map(user => parsed.find(credential => credential.userId === user.id) || { userId: user.id, passwordHash: defaultPasswordHash });
-  });
 
-  const [passwordResetTokens, setPasswordResetTokens] = useState<Record<string, PasswordResetToken>>(() => {
-    const saved = localStorage.getItem('workspace_password_reset_tokens');
-    if (!saved) return {};
-    try {
-      const value = JSON.parse(saved);
-      return value && typeof value === 'object' ? value : {};
-    } catch {
-      return {};
-    }
-  });
-
-  const [organizations, setOrganizations] = useState<Organization[]>(() => {
-    const saved = localStorage.getItem('workspace_organizations');
-    if (!saved) return [];
-    try {
-      const parsed = JSON.parse(saved);
-      return Array.isArray(parsed)
-        ? parsed.filter((organization): organization is Organization => Boolean(
-            organization && typeof organization.id === 'string' && typeof organization.name === 'string' && Array.isArray(organization.memberIds)
-          ))
-        : [];
-    } catch {
-      return [];
-    }
-  });
+  const [organizations, setOrganizationsState] = useState<Organization[]>([]);
 
   const [activeOrganizationId, setActiveOrganizationIdState] = useState<string | null>(() => {
     return localStorage.getItem('workspace_active_organization');
@@ -324,16 +258,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const [agents, setAgents] = useState<WorkspaceAgent[]>(() => {
-    const saved = localStorage.getItem('workspace_agents');
-    if (!saved) return [];
-    try {
-      const parsed = JSON.parse(saved);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
+  const [agents, setAgentsState] = useState<WorkspaceAgent[]>([]);
 
   useEffect(() => {
     setUsers(previousUsers => {
@@ -356,7 +281,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     });
   }, [agents, channels, organizations]);
 
-  const [messages, setMessages] = useState<Message[]>(() => {
+  const [messages, setMessagesState] = useState<Message[]>(() => {
     const saved = localStorage.getItem('workspace_messages');
     if (saved) return JSON.parse(saved);
     return [
@@ -372,15 +297,12 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     ];
   });
 
-  const [drafts, setDrafts] = useState<Draft[]>(() => {
-    const saved = localStorage.getItem('workspace_drafts');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [drafts, setDrafts] = useState<Draft[]>([]);
 
-  const [savedItems, setSavedItems] = useState<string[]>(() => {
-    const saved = localStorage.getItem('workspace_savedItems');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [savedItems, setSavedItemsState] = useState<string[]>([]);
+
+  const syncedMessagesRef = useRef<Message[]>([]);
+  const syncedSavedItemsRef = useRef<string[]>([]);
 
   const [userLanguage, setUserLanguage] = useState<string>(() => {
     return localStorage.getItem('workspace_user_language') || 'English (US)';
@@ -631,79 +553,352 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     setActiveHuddle(prev => ({ ...prev, micLevel: level }));
   };
 
-  const currentUser = users.find(u => u.id === authenticatedUserId);
+  const hydrateWorkspace = async (authUser: User, generation = ++hydrationGenerationRef.current) => {
+    setIsSupabaseHydrated(false);
+    const results = await Promise.all([
+      supabase.from('profiles').select('*'),
+      supabase.from('organizations').select('*').order('created_at'),
+      supabase.from('organization_members').select('*'),
+      supabase.from('channels').select('*').order('created_at'),
+      supabase.from('channel_members').select('*'),
+      supabase.from('messages').select('*').order('created_at'),
+      supabase.from('message_reactions').select('*'),
+      supabase.from('saved_items').select('message_id'),
+      supabase.from('agents').select('*').order('created_at')
+    ]);
+    if (generation !== hydrationGenerationRef.current) return;
+    const failed = results.find(result => result.error);
+    if (failed?.error) throw failed.error;
+    const [profiles, organizationRows, membershipRows, channelRows, channelMembershipRows, messageRows, reactionRows, savedRows, agentRows] = results.map(result => result.data || []);
+
+    const nextUsers: WorkspaceUser[] = profiles.map((profile: any) => ({
+      id: profile.id, name: profile.name, email: profile.email, username: profile.username || undefined,
+      role: profile.role, title: profile.title || undefined, phone: profile.phone || undefined,
+      avatarUrl: profile.avatar_url || undefined, status: profile.status,
+      organizationIds: membershipRows.filter((member: any) => member.user_id === profile.id).map((member: any) => member.organization_id),
+      channelIds: channelMembershipRows.filter((member: any) => member.user_id === profile.id).map((member: any) => member.channel_id)
+    }));
+    const nextOrganizations: Organization[] = organizationRows.map((organization: any) => ({
+      id: organization.id, name: organization.name, description: organization.description || undefined,
+      logoUrl: organization.logo_url || undefined,
+      memberIds: [
+        ...membershipRows.filter((member: any) => member.organization_id === organization.id).map((member: any) => member.user_id),
+        ...agentRows.filter((agent: any) => agent.organization_id === organization.id).map((agent: any) => agent.id)
+      ],
+      createdAt: new Date(organization.created_at).getTime()
+    }));
+    const nextChannels: Channel[] = channelRows.map((channel: any) => ({
+      id: channel.id, name: channel.name, isPrivate: channel.is_private, organizationId: channel.organization_id,
+      memberIds: channelMembershipRows.filter((member: any) => member.channel_id === channel.id).map((member: any) => member.user_id)
+    }));
+    const replies = new Map<string, Reply[]>();
+    for (const row of messageRows.filter((message: any) => message.parent_message_id) as any[]) {
+      const existing = replies.get(row.parent_message_id) || [];
+      existing.push({ id: row.id, senderId: row.sender_id, text: row.content, timestamp: new Date(row.created_at).getTime(), isRead: true,
+        reactions: reactionRows.filter((reaction: any) => reaction.message_id === row.id).map((reaction: any) => reaction.emoji) });
+      replies.set(row.parent_message_id, existing);
+    }
+    const nextMessages: Message[] = (messageRows as any[]).filter(row => !row.parent_message_id && row.channel_id).map(row => ({
+      id: row.id, channelId: row.channel_id, senderId: row.sender_id, text: row.content,
+      timestamp: new Date(row.created_at).getTime(), isRead: true, replies: replies.get(row.id) || [],
+      reactions: reactionRows.filter((reaction: any) => reaction.message_id === row.id).map((reaction: any) => reaction.emoji)
+    }));
+    const nextSavedItems = savedRows.map((item: any) => item.message_id);
+    let localAgentKeys: Record<string, string> = {};
+    try { localAgentKeys = JSON.parse(localStorage.getItem(`workspace_agent_keys_${authUser.id}`) || '{}'); } catch { localAgentKeys = {}; }
+    const nextAgents: WorkspaceAgent[] = agentRows.map((agent: any) => ({
+      id: agent.id, name: agent.name, username: agent.username, email: agent.email, model: agent.model,
+      apiBaseUrl: agent.api_base_url, apiKey: localAgentKeys[agent.id] || '', jobDetails: agent.job_details, personality: agent.personality,
+      databaseAccess: { organizations: agent.can_read_organizations, publicThreads: agent.can_read_public_threads, webSearch: agent.can_search_web },
+      enabled: agent.enabled, createdAt: new Date(agent.created_at).getTime()
+    }));
+
+    if (generation !== hydrationGenerationRef.current) return;
+    setAuthenticatedUserId(authUser.id);
+    setUsers(nextUsers);
+    setOrganizationsState(nextOrganizations);
+    setChannelsState(nextChannels);
+    setMessagesState(nextMessages);
+    setSavedItemsState(nextSavedItems);
+    setAgentsState(nextAgents);
+    const savedDrafts = localStorage.getItem(`workspace_drafts_${authUser.id}`);
+    try { setDrafts(savedDrafts ? JSON.parse(savedDrafts) : []); } catch { setDrafts([]); }
+    syncedMessagesRef.current = nextMessages;
+    syncedSavedItemsRef.current = nextSavedItems;
+    setWorkspaceName(nextOrganizations[0]?.name || 'DeskFlow');
+    setIsAuthenticated(true);
+    setIsSupabaseHydrated(true);
+  };
+
+  useEffect(() => {
+    let active = true;
+    const applyUser = async (user: User | null) => {
+      if (!active) return;
+      const generation = ++hydrationGenerationRef.current;
+      if (!user) {
+        setAuthenticatedUserId(null); setIsAuthenticated(false); setIsSupabaseHydrated(false); setDrafts([]);
+        return;
+      }
+      try { await hydrateWorkspace(user, generation); }
+      catch (error) {
+        console.error('Unable to load the Supabase workspace.', error);
+        if (active && generation === hydrationGenerationRef.current) {
+          setAuthenticatedUserId(null); setIsAuthenticated(false); setIsSupabaseHydrated(false);
+        }
+      }
+    };
+    void supabase.auth.getSession().then(({ data }) => applyUser(data.session?.user || null));
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') setIsPasswordRecovery(true);
+      if (event === 'SIGNED_OUT') setIsPasswordRecovery(false);
+      void applyUser(session?.user || null);
+    });
+    return () => { active = false; ++hydrationGenerationRef.current; data.subscription.unsubscribe(); };
+  }, []);
+
+  const currentUser = users.find(user => user.id === authenticatedUserId);
+
+  const setAgents: React.Dispatch<React.SetStateAction<WorkspaceAgent[]>> = update => {
+    setAgentsState(previous => {
+      const next = typeof update === 'function' ? update(previous) : update;
+      if (authenticatedUserId) {
+        const localKeys = Object.fromEntries(next.filter(agent => agent.apiKey).map(agent => [agent.id, agent.apiKey]));
+        localStorage.setItem(`workspace_agent_keys_${authenticatedUserId}`, JSON.stringify(localKeys));
+      }
+      if (isSupabaseHydrated && authenticatedUserId && currentUser?.role === 'Super Admin') {
+        void reconcileAgents(previous, next, authenticatedUserId);
+      }
+      return next;
+    });
+  };
+
+  const reconcileAgents = async (previous: WorkspaceAgent[], next: WorkspaceAgent[], userId: string) => {
+    const nextIds = new Set(next.map(agent => agent.id));
+    for (const agent of next) {
+      const existing = previous.find(item => item.id === agent.id);
+      if (existing && JSON.stringify({ ...existing, apiKey: '' }) === JSON.stringify({ ...agent, apiKey: '' })) continue;
+      const organizationId = organizations.find(organization => organization.memberIds.includes(agent.id))?.id || activeOrganizationId;
+      if (!organizationId) continue;
+      const { error } = await supabase.from('agents').upsert({
+        id: agent.id, organization_id: organizationId, name: agent.name, username: agent.username,
+        email: agent.email, model: agent.model, api_base_url: agent.apiBaseUrl,
+        job_details: agent.jobDetails, personality: agent.personality,
+        can_read_organizations: agent.databaseAccess.organizations,
+        can_read_public_threads: agent.databaseAccess.publicThreads,
+        can_search_web: agent.databaseAccess.webSearch || false,
+        enabled: agent.enabled, created_by: userId, updated_at: new Date().toISOString()
+      });
+      if (error) console.error('Unable to save agent configuration.', error);
+    }
+    const removed = previous.filter(agent => !nextIds.has(agent.id));
+    if (removed.length) {
+      const { error } = await supabase.from('agents').delete().in('id', removed.map(agent => agent.id));
+      if (error) console.error('Unable to delete agents.', error);
+    }
+  };
+
+  const setOrganizations: React.Dispatch<React.SetStateAction<Organization[]>> = update => {
+    setOrganizationsState(previous => {
+      const next = typeof update === 'function' ? update(previous) : update;
+      if (isSupabaseHydrated && authenticatedUserId && currentUser?.role === 'Super Admin') {
+        void reconcileOrganizations(previous, next, authenticatedUserId);
+      }
+      return next;
+    });
+  };
+
+  const reconcileOrganizations = async (previous: Organization[], next: Organization[], userId: string) => {
+    const previousIds = new Set(previous.map(organization => organization.id));
+    const nextIds = new Set(next.map(organization => organization.id));
+    const removed = previous.filter(organization => !nextIds.has(organization.id));
+    for (const organization of next) {
+      const isNew = !previousIds.has(organization.id);
+      const { error } = await supabase.from('organizations').upsert({
+        id: organization.id,
+        name: organization.name,
+        description: organization.description || null,
+        logo_url: organization.logoUrl || null,
+        created_by: isNew ? userId : undefined,
+        updated_at: new Date().toISOString()
+      });
+      if (error) { console.error('Unable to save organization.', error); continue; }
+
+      const validMemberIds = Array.from(new Set([userId, ...organization.memberIds.filter(id => users.some(user => user.id === id && !user.isAgent))]));
+      const existing = previous.find(item => item.id === organization.id)?.memberIds.filter(id => users.some(user => user.id === id && !user.isAgent)) || [];
+      const additions = validMemberIds.filter(id => !existing.includes(id));
+      const deletions = existing.filter(id => id !== userId && !validMemberIds.includes(id));
+      if (additions.length) {
+        const rows = additions.map(memberId => ({ organization_id: organization.id, user_id: memberId, role: memberId === userId ? 'Super Admin' : users.find(user => user.id === memberId)?.role || 'Member' }));
+        const { error: memberError } = await supabase.from('organization_members').upsert(rows, { onConflict: 'organization_id,user_id' });
+        if (memberError) console.error('Unable to add organization members.', memberError);
+      }
+      if (deletions.length) {
+        const { error: memberError } = await supabase.from('organization_members').delete().eq('organization_id', organization.id).in('user_id', deletions);
+        if (memberError) console.error('Unable to remove organization members.', memberError);
+      }
+    }
+    for (const organization of removed) {
+      const { error } = await supabase.from('organizations').delete().eq('id', organization.id);
+      if (error) console.error('Unable to delete organization.', error);
+    }
+  };
+
+  const setChannels: React.Dispatch<React.SetStateAction<Channel[]>> = update => {
+    setChannelsState(previous => {
+      const requested = typeof update === 'function' ? update(previous) : update;
+      const next = requested.map(channel => channel.organizationId || !activeOrganizationId
+        ? channel
+        : { ...channel, organizationId: activeOrganizationId }
+      );
+      if (isSupabaseHydrated && authenticatedUserId) void reconcileChannels(previous, next, authenticatedUserId);
+      return next;
+    });
+  };
+
+  const reconcileChannels = async (previous: Channel[], next: Channel[], userId: string) => {
+    const nextIds = new Set(next.map(channel => channel.id));
+    const removed = previous.filter(channel => !nextIds.has(channel.id));
+    for (const channel of next) {
+      const previousChannel = previous.find(item => item.id === channel.id);
+      const organizationId = channel.organizationId || activeOrganizationId;
+      if (!organizationId) continue;
+      if (!previousChannel || JSON.stringify(previousChannel) !== JSON.stringify(channel)) {
+        const { error } = await supabase.from('channels').upsert({
+          id: channel.id, organization_id: organizationId, name: channel.name,
+          is_private: channel.isPrivate, created_by: previousChannel ? undefined : userId
+        });
+        if (error) { console.error('Unable to save channel.', error); continue; }
+        const validMemberIds = (channel.memberIds || []).filter(id => users.some(user => user.id === id && !user.isAgent));
+        const existing = (previousChannel?.memberIds || []).filter(id => users.some(user => user.id === id && !user.isAgent));
+        const additions = validMemberIds.filter(id => !existing.includes(id));
+        const deletions = existing.filter(id => !validMemberIds.includes(id));
+        if (additions.length) {
+          const { error: memberError } = await supabase.from('channel_members').upsert(additions.map(memberId => ({ channel_id: channel.id, user_id: memberId })), { onConflict: 'channel_id,user_id' });
+          if (memberError) console.error('Unable to add channel members.', memberError);
+        }
+        if (deletions.length) {
+          const { error: memberError } = await supabase.from('channel_members').delete().eq('channel_id', channel.id).in('user_id', deletions);
+          if (memberError) console.error('Unable to remove channel members.', memberError);
+        }
+      }
+    }
+    if (removed.length) {
+      const { error } = await supabase.from('channels').delete().in('id', removed.map(channel => channel.id));
+      if (error) console.error('Unable to delete channels.', error);
+    }
+  };
+
+  const setSavedItems: React.Dispatch<React.SetStateAction<string[]>> = update => {
+    setSavedItemsState(previous => {
+      const next = typeof update === 'function' ? update(previous) : update;
+      if (isSupabaseHydrated && authenticatedUserId) {
+        const added = next.filter(id => !previous.includes(id));
+        const removed = previous.filter(id => !next.includes(id));
+        void (async () => {
+          if (added.length) {
+            const organizationByMessage = new Map(messages.map(message => [message.id, channels.find(channel => channel.id === message.channelId)?.organizationId]));
+            const rows = added.map(messageId => ({ organization_id: organizationByMessage.get(messageId), user_id: authenticatedUserId, message_id: messageId }));
+            const { error } = await supabase.from('saved_items').upsert(rows, { onConflict: 'user_id,message_id' });
+            if (error) console.error('Unable to save items.', error);
+          }
+          if (removed.length) {
+            const { error } = await supabase.from('saved_items').delete().eq('user_id', authenticatedUserId).in('message_id', removed);
+            if (error) console.error('Unable to remove saved items.', error);
+          }
+        })();
+      }
+      syncedSavedItemsRef.current = next;
+      return next;
+    });
+  };
+
+  const setMessages: React.Dispatch<React.SetStateAction<Message[]>> = update => {
+    setMessagesState(previous => {
+      const next = typeof update === 'function' ? update(previous) : update;
+      if (isSupabaseHydrated && authenticatedUserId) void persistMessageChanges(previous, next, authenticatedUserId);
+      syncedMessagesRef.current = next;
+      return next;
+    });
+  };
+
+  const persistMessageChanges = async (previous: Message[], next: Message[], userId: string) => {
+    const flatten = (items: Message[]) => items.flatMap(message => [
+      { id: message.id, channelId: message.channelId, senderId: message.senderId, text: message.text, timestamp: message.timestamp, parentId: null as string | null, reactions: message.reactions || [] },
+      ...message.replies.map(reply => ({ id: reply.id, channelId: message.channelId, senderId: reply.senderId, text: reply.text, timestamp: reply.timestamp, parentId: message.id, reactions: reply.reactions || [] }))
+    ]);
+    const before = new Map(flatten(previous).map(row => [row.id, row]));
+    const nextRows = flatten(next);
+    const changed = nextRows.filter(row => row.senderId === userId && JSON.stringify(before.get(row.id)) !== JSON.stringify(row));
+    const removed = flatten(previous).filter(row => row.senderId === userId && !nextRows.some(candidate => candidate.id === row.id)).map(row => row.id);
+    if (changed.length) {
+      const organizationByChannel = new Map(channels.map(channel => [channel.id, channel.organizationId]));
+      const { error } = await supabase.from('messages').upsert(changed.map(row => ({
+        id: row.id, organization_id: organizationByChannel.get(row.channelId), channel_id: row.channelId,
+        sender_id: row.senderId, parent_message_id: row.parentId, content: row.text,
+        created_at: new Date(row.timestamp).toISOString(), updated_at: new Date().toISOString()
+      })));
+      if (error) console.error('Unable to save messages.', error);
+    }
+    if (removed.length) {
+      const { error } = await supabase.from('messages').delete().in('id', removed);
+      if (error) console.error('Unable to delete messages.', error);
+    }
+
+    const beforeRows = flatten(previous);
+    for (const row of nextRows) {
+      const previousReactions = beforeRows.find(item => item.id === row.id)?.reactions || [];
+      const added = row.reactions.filter(emoji => !previousReactions.includes(emoji));
+      const deleted = previousReactions.filter(emoji => !row.reactions.includes(emoji));
+      if (added.length) {
+        const { error } = await supabase.from('message_reactions').upsert(added.map(emoji => ({ message_id: row.id, user_id: userId, emoji })), { onConflict: 'message_id,user_id,emoji' });
+        if (error) console.error('Unable to save reactions.', error);
+      }
+      if (deleted.length) {
+        const { error } = await supabase.from('message_reactions').delete().eq('message_id', row.id).eq('user_id', userId).in('emoji', deleted);
+        if (error) console.error('Unable to remove reactions.', error);
+      }
+    }
+  };
 
   const login = async (email: string, password: string): Promise<string | null> => {
-    const normalizedEmail = email.trim().toLowerCase();
-    const user = users.find(candidate => candidate.email.toLowerCase() === normalizedEmail && !candidate.isAgent);
-    if (!user) return 'No account was found for that email address.';
-    const credential = passwordCredentials.find(item => item.userId === user.id);
-    if (!credential) return 'This account does not have a password yet. Ask a Super Admin to set one.';
-    if ((await hashPassword(password)) !== credential.passwordHash) return 'The email or password is incorrect.';
-    localStorage.setItem('workspace_authenticated', 'true');
-    localStorage.setItem('workspace_authenticated_user', user.id);
-    setAuthenticatedUserId(user.id);
-    setIsAuthenticated(true);
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
+    if (error) return error.message;
+    setIsPasswordRecovery(false);
     return null;
   };
 
   const logout = () => {
-    localStorage.setItem('workspace_authenticated', 'false');
-    setIsAuthenticated(false);
-    setIsProfileModalOpen(false);
-  };
-
-  const savePasswordCredential = (userId: string, passwordHash: string) => {
-    setPasswordCredentials(previous => {
-      const next = previous.some(item => item.userId === userId)
-        ? previous.map(item => item.userId === userId ? { userId, passwordHash } : item)
-        : [...previous, { userId, passwordHash }];
-      return next;
-    });
+    ++hydrationGenerationRef.current;
+    void supabase.auth.signOut();
+    setAuthenticatedUserId(null); setIsAuthenticated(false); setIsSupabaseHydrated(false); setIsProfileModalOpen(false);
   };
 
   const changeCurrentUserPassword = async (currentPassword: string, newPassword: string) => {
     if (!currentUser) return { success: false, error: 'No signed-in user was found.' };
     if (!passwordMeetsRequirements(newPassword)) return { success: false, error: 'New password must be at least 8 characters.' };
-    const credential = passwordCredentials.find(item => item.userId === currentUser.id);
-    if (!credential || (await hashPassword(currentPassword)) !== credential.passwordHash) {
-      return { success: false, error: 'Current password is incorrect.' };
-    }
     if (currentPassword === newPassword) return { success: false, error: 'New password must be different from the current password.' };
-    savePasswordCredential(currentUser.id, await hashPassword(newPassword));
-    return { success: true };
+    const { error: verifyError } = await supabase.auth.signInWithPassword({ email: currentUser.email, password: currentPassword });
+    if (verifyError) return { success: false, error: 'Current password is incorrect.' };
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    return error ? { success: false, error: error.message } : { success: true };
   };
 
-  const adminSetUserPassword = async (userId: string, newPassword: string) => {
-    if (currentUser?.role !== 'Super Admin') return { success: false, error: 'Only Super Admins can set another user’s password.' };
-    if (!users.some(user => user.id === userId && !user.isAgent)) return { success: false, error: 'User account was not found.' };
-    if (!passwordMeetsRequirements(newPassword)) return { success: false, error: 'Password must be at least 8 characters.' };
-    savePasswordCredential(userId, await hashPassword(newPassword));
-    return { success: true };
-  };
+  const adminSetUserPassword = async (_userId: string, _newPassword: string) => ({ success: false, error: 'Send the user a Supabase password-reset email instead.' });
 
   const requestPasswordReset = async (email: string) => {
-    const normalizedEmail = email.trim().toLowerCase();
-    const user = users.find(candidate => candidate.email.toLowerCase() === normalizedEmail && !candidate.isAgent);
-    if (!user) return { success: false, error: 'No account was found for that email address.' };
-    const tokenBytes = new Uint8Array(24);
-    globalThis.crypto.getRandomValues(tokenBytes);
-    const token = Array.from(tokenBytes).map(byte => byte.toString(16).padStart(2, '0')).join('');
-    setPasswordResetTokens(previous => ({ ...previous, [token]: { userId: user.id, expiresAt: Date.now() + 30 * 60 * 1000, used: false } }));
-    const resetUrl = new URL(window.location.href);
-    resetUrl.search = '';
-    resetUrl.hash = `resetToken=${token}`;
-    return { success: true, link: resetUrl.toString() };
+    const redirectTo = `${window.location.origin}${window.location.pathname}`;
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), { redirectTo });
+    return error ? { success: false, error: error.message } : { success: true };
   };
 
-  const resetPasswordWithToken = async (token: string, newPassword: string) => {
+  const resetPasswordWithToken = async (_token: string, newPassword: string) => {
     if (!passwordMeetsRequirements(newPassword)) return { success: false, error: 'Password must be at least 8 characters.' };
-    const resetToken = passwordResetTokens[token];
-    if (!resetToken || resetToken.used || resetToken.expiresAt < Date.now()) return { success: false, error: 'This reset link is invalid or has expired.' };
-    const user = users.find(candidate => candidate.id === resetToken.userId && !candidate.isAgent);
-    if (!user) return { success: false, error: 'User account was not found.' };
-    savePasswordCredential(user.id, await hashPassword(newPassword));
-    setPasswordResetTokens(previous => ({ ...previous, [token]: { ...resetToken, used: true } }));
+    const { data } = await supabase.auth.getSession();
+    if (!data.session) return { success: false, error: 'This reset link is invalid or has expired.' };
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) return { success: false, error: error.message };
+    setIsPasswordRecovery(false);
+    await supabase.auth.signOut();
     return { success: true };
   };
 
@@ -753,43 +948,36 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
 
   const updateCurrentUserProfile = (updates: { name?: string; email?: string; phone?: string; title?: string; avatarUrl?: string }) => {
     if (!currentUser) return;
-    setUsers(previousUsers => previousUsers.map(user => user.id === currentUser.id
-      ? { ...user, ...updates }
-      : user
-    ));
+    const previousUser = currentUser;
+    void (async () => {
+      const requestedEmail = updates.email?.trim();
+      let effectiveEmail = previousUser.email;
+      if (requestedEmail && requestedEmail !== previousUser.email) {
+        const { data: authData, error: authError } = await supabase.auth.updateUser({ email: requestedEmail });
+        if (authError) {
+          console.error('Unable to update authentication email.', authError);
+          return;
+        }
+        effectiveEmail = authData.user.email || previousUser.email;
+      }
+      const safeUpdates = { ...updates, email: effectiveEmail };
+      setUsers(previousUsers => previousUsers.map(user => user.id === previousUser.id ? { ...user, ...safeUpdates } : user));
+      const { error } = await supabase.from('profiles').update({
+        name: safeUpdates.name ?? previousUser.name,
+        phone: safeUpdates.phone ?? previousUser.phone ?? null,
+        title: safeUpdates.title ?? previousUser.title ?? null,
+        avatar_url: safeUpdates.avatarUrl ?? previousUser.avatarUrl ?? null,
+        updated_at: new Date().toISOString()
+      }).eq('id', previousUser.id);
+      if (error) {
+        console.error('Unable to update profile.', error);
+        setUsers(previousUsers => previousUsers.map(user => user.id === previousUser.id ? previousUser : user));
+      }
+    })();
   };
 
   useEffect(() => {
-    localStorage.setItem('workspace_name', workspaceName);
-  }, [workspaceName]);
-
-  useEffect(() => {
-    localStorage.setItem('workspace_channels', JSON.stringify(channels));
-  }, [channels]);
-
-  useEffect(() => {
-    localStorage.setItem('workspace_users', JSON.stringify(users));
-  }, [users]);
-
-  useEffect(() => {
-    localStorage.setItem('workspace_password_credentials', JSON.stringify(passwordCredentials));
-  }, [passwordCredentials]);
-
-  useEffect(() => {
-    localStorage.setItem('workspace_password_reset_tokens', JSON.stringify(passwordResetTokens));
-  }, [passwordResetTokens]);
-
-  useEffect(() => {
-    localStorage.setItem('workspace_messages', JSON.stringify(messages));
-  }, [messages]);
-
-  useEffect(() => {
-    localStorage.setItem('workspace_organizations', JSON.stringify(organizations));
-  }, [organizations]);
-
-  useEffect(() => {
-    // The setter persists immediately; this also keeps the key in sync if
-    // organization state is restored or replaced by an external update.
+    // The active workspace is a device preference; workspace data itself is loaded from Supabase.
     if (activeOrganizationId) {
       localStorage.setItem('workspace_active_organization', activeOrganizationId);
     } else {
@@ -798,16 +986,8 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
   }, [activeOrganizationId]);
 
   useEffect(() => {
-    localStorage.setItem('workspace_agents', JSON.stringify(agents));
-  }, [agents]);
-
-  useEffect(() => {
-    localStorage.setItem('workspace_drafts', JSON.stringify(drafts));
-  }, [drafts]);
-
-  useEffect(() => {
-    localStorage.setItem('workspace_savedItems', JSON.stringify(savedItems));
-  }, [savedItems]);
+    if (authenticatedUserId) localStorage.setItem(`workspace_drafts_${authenticatedUserId}`, JSON.stringify(drafts));
+  }, [drafts, authenticatedUserId]);
 
   useEffect(() => {
     localStorage.setItem('workspace_user_language', userLanguage);
@@ -841,7 +1021,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       drafts, setDrafts,
       savedItems, setSavedItems,
       currentUser,
-      isAuthenticated, login, logout,
+      isAuthenticated, isPasswordRecovery, login, logout,
       changeCurrentUserPassword,
       adminSetUserPassword,
       requestPasswordReset,

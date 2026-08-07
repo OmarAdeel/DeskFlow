@@ -39,12 +39,13 @@ export default function App() {
     isProfileModalOpen,
     setIsProfileModalOpen,
     isAuthenticated,
+    isPasswordRecovery,
     channels,
     users,
     currentUser,
     activeOrganizationId
   } = useWorkspace();
-  const hasPasswordResetToken = new URLSearchParams(window.location.hash.replace(/^#/, '')).has('resetToken');
+
   const [currentView, setCurrentView] = useState<ViewType>('unreads');
   const [currentChannelId, setCurrentChannelId] = useState<string>('4');
   const [sidebarWidth, setSidebarWidth] = useState(260);
@@ -214,7 +215,7 @@ export default function App() {
     }
   };
 
-  if (!isAuthenticated || hasPasswordResetToken) {
+  if (!isAuthenticated || isPasswordRecovery) {
     return <LoginScreen />;
   }
 
