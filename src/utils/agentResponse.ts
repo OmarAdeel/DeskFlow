@@ -224,6 +224,18 @@ const normalizeModel = (model: string): string => model.trim().toLowerCase().rep
 
 const getApiRoot = (baseUrl: string): string => baseUrl.replace(/\/(?:chat\/completions|responses)\/?$/, '');
 
+const requestProvider = (
+  endpoint: string,
+  apiKey: string,
+  payload: Record<string, unknown>,
+  signal?: AbortSignal
+) => fetch('/api/agent-proxy', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ endpoint, apiKey, payload }),
+  signal
+});
+
 const removeAgentNamePrefix = (content: string, agent: WorkspaceAgent): string => {
   const possibleNames = [agent.name, agent.username]
     .map(value => String(value || '').trim().replace(/^@/, ''))
@@ -277,26 +289,16 @@ export const requestAgentReply = async (
       ...conversationHistory,
       { role: 'user' as const, content: prompt }
     ];
-    const headers = {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`
-    };
-
     // OpenAI's current browsing interface is the Responses API tool. Require
     // the tool for a request that explicitly needs current/external data so a
     // model cannot silently answer from memory without searching.
     if (requestedWebSearch && canUseHostedWebSearch) {
-      const responsesResponse = await fetch(`${apiRoot}/responses`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          model,
-          input: messages,
-          tools: [{ type: 'web_search' }],
-          tool_choice: isDeepSeekProvider(apiRoot) ? { type: 'web_search' } : 'required'
-        }),
-        signal
-      });
+      const responsesResponse = await requestProvider(`${apiRoot}/responses`, apiKey, {
+        model,
+        input: messages,
+        tools: [{ type: 'web_search' }],
+        tool_choice: isDeepSeekProvider(apiRoot) ? { type: 'web_search' } : 'required'
+      }, signal);
       if (responsesResponse.ok) {
         const data = await responsesResponse.json() as ResponsesApiResponse;
         const content = extractResponsesContent(data);
@@ -318,12 +320,7 @@ export const requestAgentReply = async (
       requestBody.web_search_options = {};
     }
 
-    const request = () => fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(requestBody),
-      signal
-    });
+    const request = () => requestProvider(endpoint, apiKey, requestBody, signal);
     let response = await request();
 
     // Some OpenAI-compatible providers do not recognize web_search_options.
