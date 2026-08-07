@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { 
   X, Globe, Palette, Check, User, Shield, CheckCircle2,
-  ChevronRight, Settings, KeyRound, AlertCircle
+  ChevronRight, Settings, KeyRound, AlertCircle, Download, Bell, BellOff, Smartphone
 } from 'lucide-react';
 import { useWorkspace } from '../context';
 import { getTranslation } from '../utils/i18n';
+import { useWebAppFeatures } from '../hooks/useWebAppFeatures';
 
 interface UserProfileModalProps {
   isOpen: boolean;
@@ -110,7 +111,7 @@ export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSetting
     changeCurrentUserPassword
   } = useWorkspace();
 
-  const [activeTab, setActiveTab] = useState<'general' | 'language' | 'theme' | 'security'>('language');
+  const [activeTab, setActiveTab] = useState<'general' | 'language' | 'theme' | 'security' | 'app'>('language');
   const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
   const [profileName, setProfileName] = useState(currentUser?.name || '');
   const [profileEmail, setProfileEmail] = useState(currentUser?.email || '');
@@ -122,6 +123,7 @@ export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSetting
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const profileImageInputRef = useRef<HTMLInputElement>(null);
+  const { installAvailable, isInstalled, installApp, notificationPermission, notificationsEnabled, toggleNotifications } = useWebAppFeatures();
 
   useEffect(() => {
     setProfileName(currentUser?.name || '');
@@ -264,7 +266,7 @@ export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSetting
         )}
 
         {/* Navigation Tabs */}
-        <div className="flex border-b border-gray-800 bg-[#16181D] px-6 pt-2 space-x-2 rtl:space-x-reverse">
+        <div className="flex shrink-0 overflow-x-auto border-b border-gray-800 bg-[#16181D] px-6 pt-2 space-x-2 rtl:space-x-reverse">
           <button
             onClick={() => setActiveTab('language')}
             className={`flex items-center space-x-2 rtl:space-x-reverse px-4 py-2.5 font-bold text-xs rounded-t-xl transition cursor-pointer border-b-2 ${
@@ -302,6 +304,18 @@ export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSetting
           </button>
 
           <button
+            onClick={() => setActiveTab('app')}
+            className={`flex items-center space-x-2 rtl:space-x-reverse px-4 py-2.5 font-bold text-xs rounded-t-xl transition cursor-pointer border-b-2 ${
+              activeTab === 'app'
+                ? 'bg-[#1A1D21] text-blue-400 border-blue-500'
+                : 'text-gray-400 hover:text-gray-200 border-transparent hover:bg-gray-800/50'
+            }`}
+          >
+            <Smartphone className="h-4 w-4" />
+            <span>{isArabic ? 'التطبيق والتنبيهات' : 'App & notifications'}</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('general')}
             className={`flex items-center space-x-2 rtl:space-x-reverse px-4 py-2.5 font-bold text-xs rounded-t-xl transition cursor-pointer border-b-2 ${
               activeTab === 'general'
@@ -317,6 +331,25 @@ export function UserProfileModal({ isOpen, onClose, onNavigateToWorkspaceSetting
         {/* Modal Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
           
+          {activeTab === 'app' && (
+            <div className="space-y-4">
+              <div><h4 className="text-sm font-bold text-white flex items-center gap-2"><Smartphone className="h-4 w-4 text-violet-400" /><span>{isArabic ? 'تطبيق DeskFlow والتنبيهات' : 'DeskFlow app & notifications'}</span></h4><p className="mt-1 text-xs text-gray-400">{isArabic ? 'ثبّت DeskFlow كتطبيق وفعّل تنبيهات الرسائل الجديدة.' : 'Install DeskFlow as an app and enable alerts for new messages while DeskFlow is in the background.'}</p></div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <section className="rounded-xl border border-violet-500/30 bg-violet-500/10 p-4 space-y-3">
+                  <div className="flex items-center gap-2"><Download className="h-5 w-5 text-violet-300" /><h5 className="text-sm font-bold text-white">{isArabic ? 'تثبيت التطبيق' : 'Install DeskFlow'}</h5></div>
+                  <p className="text-xs leading-relaxed text-gray-400">{isInstalled ? 'DeskFlow is already running as an installed web app.' : 'Install DeskFlow on your desktop or home screen for quick access and a standalone window.'}</p>
+                  <button type="button" disabled={isInstalled} onClick={async () => { const result = await installApp(); setNotificationMessage(result.message || null); }} className="w-full rounded-lg bg-violet-600 hover:bg-violet-500 disabled:bg-gray-700 disabled:text-gray-400 px-3 py-2 text-xs font-bold text-white">{isInstalled ? 'DeskFlow is installed' : installAvailable ? 'Install DeskFlow now' : 'Show installation instructions'}</button>
+                </section>
+                <section className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 space-y-3">
+                  <div className="flex items-center gap-2">{notificationsEnabled ? <Bell className="h-5 w-5 text-emerald-300" /> : <BellOff className="h-5 w-5 text-gray-400" />}<h5 className="text-sm font-bold text-white">{isArabic ? 'تنبيهات المتصفح' : 'Browser notifications'}</h5></div>
+                  <p className="text-xs leading-relaxed text-gray-400">{notificationPermission === 'denied' ? 'Notifications are blocked in this browser. Allow them from the site settings first.' : notificationsEnabled ? 'DeskFlow will alert you about accessible new messages while the app is in the background.' : 'Enable notifications to receive new-message alerts while DeskFlow is in the background.'}</p>
+                  <button type="button" onClick={async () => { const result = await toggleNotifications(); setNotificationMessage(result.message); }} className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-500 px-3 py-2 text-xs font-bold text-white">{notificationsEnabled ? 'Disable notifications' : notificationPermission === 'denied' ? 'Notifications blocked' : 'Enable notifications'}</button>
+                </section>
+              </div>
+              <p className="rounded-lg border border-gray-800 bg-[#121317] px-3 py-2 text-[10px] text-gray-500">On iPhone or iPad, open DeskFlow in Safari, tap Share, then Add to Home Screen. Browser notifications require HTTPS and permission from your browser.</p>
+            </div>
+          )}
+
           {/* TAB 1: LANGUAGE SELECTION */}
           {activeTab === 'language' && (
             <div className="space-y-4">
