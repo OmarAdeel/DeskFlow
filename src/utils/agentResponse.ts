@@ -1,4 +1,5 @@
 import { WorkspaceAgent, Message, Channel, Organization, WorkspaceUser } from '../context';
+import { supabase } from '../lib/supabase';
 
 export interface AgentConversationMessage {
   role: 'user' | 'assistant';
@@ -242,9 +243,14 @@ const requestProvider = async (
   }, PROXY_TIMEOUT_MS);
 
   try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) throw new Error('Your DeskFlow session has expired. Sign in again.');
     return await fetch('/api/agent-proxy', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`
+      },
       body: JSON.stringify({ endpoint, apiKey, payload }),
       signal: controller.signal
     });
