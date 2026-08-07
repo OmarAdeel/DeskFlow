@@ -224,17 +224,38 @@ const normalizeModel = (model: string): string => model.trim().toLowerCase().rep
 
 const getApiRoot = (baseUrl: string): string => baseUrl.replace(/\/(?:chat\/completions|responses)\/?$/, '');
 
-const requestProvider = (
+const PROXY_TIMEOUT_MS = 30_000;
+
+const requestProvider = async (
   endpoint: string,
   apiKey: string,
   payload: Record<string, unknown>,
   signal?: AbortSignal
-) => fetch('/api/agent-proxy', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ endpoint, apiKey, payload }),
-  signal
-});
+): Promise<Response> => {
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort();
+  signal?.addEventListener('abort', abortFromCaller, { once: true });
+  const timeout = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, PROXY_TIMEOUT_MS);
+
+  try {
+    return await fetch('/api/agent-proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint, apiKey, payload }),
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (timedOut && !signal?.aborted) throw new Error('The agent provider request timed out.');
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+    signal?.removeEventListener('abort', abortFromCaller);
+  }
+};
 
 const removeAgentNamePrefix = (content: string, agent: WorkspaceAgent): string => {
   const possibleNames = [agent.name, agent.username]
