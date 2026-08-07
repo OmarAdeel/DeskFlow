@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Plus, Trash2, CheckCircle2, Circle, MessageSquare, LayoutGrid, Layers, Tag, 
   X, Send, User, FileText, Clock, Edit3, Save, Check, Paperclip, Sparkles, BookOpen,
   CornerDownRight, Zap, Reply
 } from 'lucide-react';
 import { canAccessChannel, useWorkspace } from '../../context';
+import { supabase } from '../../lib/supabase';
 
 export interface CanvasTaskComment {
   id: string;
@@ -170,6 +171,11 @@ export function CanvasView() {
   const { channels, users, currentUser, activeOrganizationId } = useWorkspace();
   const visibleChannels = channels.filter(channel => canAccessChannel(channel, currentUser, activeOrganizationId));
   const [cards, setCards] = useState<CanvasCard[]>([]);
+  const [isLoadingCards, setIsLoadingCards] = useState(true);
+  const [canvasError, setCanvasError] = useState<string | null>(null);
+  const cardsRef = useRef<CanvasCard[]>([]);
+  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const loadGenerationRef = useRef(0);
   const [newTitle, setNewTitle] = useState('');
   const [selectedChannelId, setSelectedChannelId] = useState<string>('');
   const [selectedColor, setSelectedColor] = useState('border-blue-500');
@@ -184,7 +190,6 @@ export function CanvasView() {
 
   const [activeTab, setActiveTab] = useState<'discussions' | 'documentation'>('discussions');
   const [newCommentText, setNewCommentText] = useState('');
-  const [selectedAuthorEmail, setSelectedAuthorEmail] = useState('abdullah.demo1@gmail.com');
   const [editingDoc, setEditingDoc] = useState('');
   const [isEditingDoc, setIsEditingDoc] = useState(false);
   const [replyingToCommentId, setReplyingToCommentId] = useState<string | null>(null);
@@ -195,47 +200,110 @@ export function CanvasView() {
     return discussions.reduce((acc, c) => acc + 1 + (c.replies?.length || 0), 0);
   };
 
+  const rowToCard = (row: { id: string; title: string; channel_id?: string | null; content?: string | null }): CanvasCard => {
+    let document: Partial<CanvasCard> = {};
+    try { document = row.content ? JSON.parse(row.content) as Partial<CanvasCard> : {}; } catch { document = {}; }
+    return {
+      id: row.id,
+      title: row.title,
+      color: typeof document.color === 'string' ? document.color : 'border-blue-500',
+      channelId: row.channel_id || undefined,
+      items: Array.isArray(document.items) ? document.items as CanvasItem[] : []
+    };
+  };
+
+  const applyRemoteCards = (nextCards: CanvasCard[]) => {
+    cardsRef.current = nextCards;
+    setCards(nextCards);
+    setActiveTaskDiscussion(previous => {
+      if (!previous) return null;
+      const updatedCard = nextCards.find(card => card.id === previous.card.id);
+      const updatedTask = updatedCard?.items.find(task => task.id === previous.task.id);
+      return updatedCard && updatedTask ? { card: updatedCard, task: updatedTask } : null;
+    });
+  };
+
   useEffect(() => {
-    const saved = localStorage.getItem('demo_canvas_cards');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        // Ensure Project Alpha Launch has 4 tasks if user visits
-        const alphaCard = parsed.find((c: CanvasCard) => c.title === 'Project Alpha Launch');
-        if (alphaCard && alphaCard.items.length < 4) {
-          const updatedCards = parsed.map((c: CanvasCard) => {
-            if (c.title === 'Project Alpha Launch') {
-              return defaultCanvasCards[0];
-            }
-            return c;
-          });
-          setCards(updatedCards);
-          localStorage.setItem('demo_canvas_cards', JSON.stringify(updatedCards));
-        } else {
-          setCards(parsed);
-        }
-      } catch (e) {
-        setCards(defaultCanvasCards);
-      }
-    } else {
-      setCards(defaultCanvasCards);
-      localStorage.setItem('demo_canvas_cards', JSON.stringify(defaultCanvasCards));
+    const generation = ++loadGenerationRef.current;
+    if (!activeOrganizationId || !currentUser) {
+      applyRemoteCards([]);
+      setIsLoadingCards(false);
+      return;
     }
-  }, []);
+
+    const loadCards = async () => {
+      const { data, error } = await supabase.from('canvases')
+        .select('id,title,channel_id,content,created_at')
+        .eq('organization_id', activeOrganizationId)
+        .order('created_at');
+      if (generation !== loadGenerationRef.current) return;
+      if (error) {
+        setCanvasError(error.message);
+        setIsLoadingCards(false);
+        return;
+      }
+      applyRemoteCards((data || []).map(rowToCard));
+      setCanvasError(null);
+      setIsLoadingCards(false);
+    };
+
+    setIsLoadingCards(true);
+    void loadCards();
+    const realtimeChannel = supabase.channel(`canvas-sync-${activeOrganizationId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'canvases' }, () => {
+        void writeQueueRef.current.then(loadCards);
+      })
+      .subscribe();
+    const refreshTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void writeQueueRef.current.then(loadCards);
+    }, 15_000);
+
+    return () => {
+      ++loadGenerationRef.current;
+      window.clearInterval(refreshTimer);
+      void supabase.removeChannel(realtimeChannel);
+    };
+  }, [activeOrganizationId, currentUser?.id]);
+
+  const persistCards = async (previousCards: CanvasCard[], updatedCards: CanvasCard[], organizationId: string, creatorId: string) => {
+    const previousById = new Map(previousCards.map(card => [card.id, card]));
+    const updatedIds = new Set(updatedCards.map(card => card.id));
+    for (const card of updatedCards) {
+      const previousCard = previousById.get(card.id);
+      const content = JSON.stringify({ color: card.color, items: card.items });
+      if (!previousCard) {
+        const { error } = await supabase.from('canvases').insert({
+          id: card.id, organization_id: organizationId, title: card.title, content,
+          channel_id: card.channelId || null, creator_id: creatorId
+        });
+        if (error) throw error;
+      } else if (JSON.stringify(previousCard) !== JSON.stringify(card)) {
+        const { error } = await supabase.from('canvases').update({
+          title: card.title, content, channel_id: card.channelId || null, updated_at: new Date().toISOString()
+        }).eq('id', card.id).eq('organization_id', organizationId);
+        if (error) throw error;
+      }
+    }
+    const removedIds = previousCards.filter(card => !updatedIds.has(card.id)).map(card => card.id);
+    if (removedIds.length) {
+      const { error } = await supabase.from('canvases').delete().eq('organization_id', organizationId).in('id', removedIds);
+      if (error) throw error;
+    }
+  };
 
   const saveCards = (updatedCards: CanvasCard[]) => {
-    setCards(updatedCards);
-    localStorage.setItem('demo_canvas_cards', JSON.stringify(updatedCards));
-    
-    // Sync activeTaskDiscussion if open
-    if (activeTaskDiscussion) {
-      const updatedCard = updatedCards.find(c => c.id === activeTaskDiscussion.card.id);
-      if (updatedCard) {
-        const updatedTask = updatedCard.items.find(t => t.id === activeTaskDiscussion.task.id);
-        if (updatedTask) {
-          setActiveTaskDiscussion({ card: updatedCard, task: updatedTask });
-        }
-      }
+    const previousCards = cardsRef.current;
+    applyRemoteCards(updatedCards);
+    if (activeOrganizationId && currentUser) {
+      const organizationId = activeOrganizationId;
+      const creatorId = currentUser.id;
+      writeQueueRef.current = writeQueueRef.current
+        .then(() => persistCards(previousCards, updatedCards, organizationId, creatorId))
+        .then(() => setCanvasError(null))
+        .catch(error => {
+          console.error('Unable to sync canvas.', error);
+          setCanvasError(error instanceof Error ? error.message : 'Unable to sync this canvas.');
+        });
     }
   };
 
@@ -331,12 +399,9 @@ export function CanvasView() {
 
   const handleAddComment = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeTaskDiscussion || !newCommentText.trim()) return;
+    if (!activeTaskDiscussion || !newCommentText.trim() || !currentUser) return;
 
-    const currentAuthor = users.find(u => u.email === selectedAuthorEmail) || {
-      name: 'Abdullah demo one',
-      email: 'abdullah.demo1@gmail.com'
-    };
+    const currentAuthor = currentUser;
 
     const newComment: CanvasTaskComment = {
       id: `comment_${Date.now()}`,
@@ -429,14 +494,11 @@ export function CanvasView() {
   };
 
   const handleAddReply = (parentCommentId: string, textToSubmit?: string) => {
-    if (!activeTaskDiscussion) return;
+    if (!activeTaskDiscussion || !currentUser) return;
     const content = (textToSubmit || replyInputs[parentCommentId])?.trim();
     if (!content) return;
 
-    const currentAuthor = users.find(u => u.email === selectedAuthorEmail) || {
-      name: 'Abdullah demo one',
-      email: 'abdullah.demo1@gmail.com'
-    };
+    const currentAuthor = currentUser;
 
     const newReply: CanvasTaskComment = {
       id: `reply_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -599,7 +661,10 @@ export function CanvasView() {
       {/* CANVAS GRID AREA */}
       <div className="flex-1 relative overflow-hidden bg-[#1f2226]">
         <div className="absolute inset-0 p-8 flex flex-wrap gap-6 overflow-auto">
-          {cards.length === 0 ? (
+          {canvasError && <div className="w-full h-fit rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-xs text-rose-200">Canvas sync failed: {canvasError}</div>}
+          {isLoadingCards ? (
+            <div className="p-16 text-center text-gray-500 max-w-sm mx-auto flex flex-col items-center justify-center select-none bg-[#1A1D21] border border-gray-800 rounded-2xl h-fit self-center"><Clock className="h-8 w-8 animate-pulse text-blue-400 mb-3" /><p className="text-sm font-bold text-gray-300">Loading shared canvas…</p></div>
+          ) : cards.length === 0 ? (
             <div className="p-16 text-center text-gray-500 max-w-sm mx-auto flex flex-col items-center justify-center select-none bg-[#1A1D21] border border-gray-800 rounded-2xl h-fit self-center">
               <Layers className="h-10 w-10 text-gray-700 mb-4 shrink-0" />
               <p className="text-sm font-bold text-gray-400">Empty workspace canvas</p>
@@ -988,16 +1053,8 @@ export function CanvasView() {
               {/* Add Comment Input Form */}
               <div className="p-4 border-t border-gray-800 bg-[#121317] space-y-3">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-[11px] text-gray-400 font-semibold">Post message as:</span>
-                  <select
-                    value={selectedAuthorEmail}
-                    onChange={(e) => setSelectedAuthorEmail(e.target.value)}
-                    className="bg-[#1A1D21] border border-gray-700 rounded-lg px-2.5 py-1 text-xs text-blue-300 focus:outline-none cursor-pointer font-semibold"
-                  >
-                    {users.map(u => (
-                      <option key={u.id} value={u.email}>{u.name}</option>
-                    ))}
-                  </select>
+                  <span className="text-[11px] text-gray-400 font-semibold">Posting as:</span>
+                  <span className="rounded-lg border border-gray-700 bg-[#1A1D21] px-2.5 py-1 text-xs font-semibold text-blue-300">{currentUser?.name || 'Workspace member'}</span>
                 </div>
 
                 {/* Team Mention bar for main comment */}

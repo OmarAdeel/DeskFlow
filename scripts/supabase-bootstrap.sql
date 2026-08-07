@@ -237,6 +237,12 @@ begin
   ) then
     alter publication supabase_realtime add table public.messages;
   end if;
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'canvases'
+  ) then
+    alter publication supabase_realtime add table public.canvases;
+  end if;
 end $$;
 create index if not exists channel_members_user_idx on public.channel_members(user_id);
 create index if not exists conversation_members_user_idx on public.conversation_members(user_id);
