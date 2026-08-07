@@ -1,4 +1,4 @@
-import deskflowLogo from '../assets/deskflow-logo.png';
+import deskflowMark from '../assets/deskflow-mark.png';
 
 export function LoadingSplash() {
   return (
@@ -8,7 +8,7 @@ export function LoadingSplash() {
         <div className="relative mb-6">
           <div className="absolute -inset-5 rounded-full bg-blue-500/15 blur-2xl" />
           <div className="relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-3xl border border-gray-700/70 bg-[#1A1D21] shadow-2xl shadow-blue-950/40">
-            <img src={deskflowLogo} alt="DeskFlow" className="h-full w-full object-cover" />
+            <img src={deskflowMark} alt="" className="h-[82%] w-[82%] object-contain" />
           </div>
         </div>
         <h1 className="text-xl font-black tracking-tight">DeskFlow</h1>
