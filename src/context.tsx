@@ -174,6 +174,7 @@ interface WorkspaceContextProps {
   changeCurrentUserPassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
   adminSetUserPassword: (userId: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
   adminCreateUser: (input: { name: string; email: string; username: string; title?: string; phone?: string; role: string; organizationId: string; channelIds: string[] }) => Promise<{ success: boolean; user?: WorkspaceUser; error?: string }>;
+  adminSaveOrganization: (input: { id: string; name: string; description?: string; logoUrl?: string; memberIds: string[] }) => Promise<{ success: boolean; organization?: Organization; error?: string }>;
   requestPasswordReset: (email: string) => Promise<{ success: boolean; link?: string; error?: string }>;
   resetPasswordWithToken: (token: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
   userLanguage: string;
@@ -928,6 +929,38 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  const adminSaveOrganization: WorkspaceContextProps['adminSaveOrganization'] = async input => {
+    if (currentUser?.role !== 'Super Admin') return { success: false, error: 'Only a Super Admin can save organizations.' };
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return { success: false, error: 'Your session has expired. Sign in again.' };
+    try {
+      const response = await fetch('/api/admin-save-organization', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify(input)
+      });
+      const result = await response.json().catch(() => null) as { success?: boolean; organization?: Organization; error?: string } | null;
+      if (!response.ok || !result?.success || !result.organization) return { success: false, error: result?.error || 'Unable to save this organization.' };
+      const savedOrganization = result.organization;
+      setOrganizationsState(previous => previous.some(organization => organization.id === savedOrganization.id)
+        ? previous.map(organization => organization.id === savedOrganization.id ? savedOrganization : organization)
+        : [...previous, savedOrganization]
+      );
+      setUsers(previous => previous.map(user => ({
+        ...user,
+        organizationIds: savedOrganization.memberIds.includes(user.id)
+          ? Array.from(new Set([...(user.organizationIds || []), savedOrganization.id]))
+          : (user.organizationIds || []).filter(organizationId => organizationId !== savedOrganization.id)
+      })));
+      return { success: true, organization: savedOrganization };
+    } catch {
+      return { success: false, error: 'The organization administration service could not be reached.' };
+    }
+  };
+
   const requestPasswordReset = async (email: string) => {
     const redirectTo = `${window.location.origin}${window.location.pathname}`;
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), { redirectTo });
@@ -1068,6 +1101,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       changeCurrentUserPassword,
       adminSetUserPassword,
       adminCreateUser,
+      adminSaveOrganization,
       requestPasswordReset,
       resetPasswordWithToken,
       userLanguage, setUserLanguage,

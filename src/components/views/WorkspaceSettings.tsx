@@ -100,7 +100,7 @@ const mockAuditLogs: AuditLogEntry[] = [
 ];
 
 export function WorkspaceSettingsView() {
-  const { workspaceName, setWorkspaceName, channels, setChannels, users, setUsers, organizations, setOrganizations, agents, setAgents, currentUser, activeOrganizationId, adminSetUserPassword, adminCreateUser, requestPasswordReset } = useWorkspace();
+  const { workspaceName, setWorkspaceName, channels, setChannels, users, setUsers, organizations, setOrganizations, agents, setAgents, currentUser, activeOrganizationId, adminSetUserPassword, adminCreateUser, adminSaveOrganization, requestPasswordReset } = useWorkspace();
   const isSuperAdmin = currentUser?.role === 'Super Admin';
   
   // Navigation tabs inside Super Admin Workspace Settings
@@ -121,6 +121,7 @@ export function WorkspaceSettingsView() {
   const [organizationMemberIds, setOrganizationMemberIds] = useState<string[]>([]);
   const organizationLogoInputRef = useRef<HTMLInputElement>(null);
   const [organizationFormError, setOrganizationFormError] = useState<string | null>(null);
+  const [isSavingOrganization, setIsSavingOrganization] = useState(false);
 
   // Social Integrations State
   const [socialIntegrations, setSocialIntegrations] = useState<IntegrationPlatform[]>(initialSocialIntegrations);
@@ -333,7 +334,7 @@ export function WorkspaceSettingsView() {
     reader.readAsDataURL(file);
   };
 
-  const handleSaveOrganization = (e?: React.FormEvent) => {
+  const handleSaveOrganization = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!isSuperAdmin) {
       setOrganizationFormError('Only Super Admins can create or edit organizations.');
@@ -351,24 +352,26 @@ export function WorkspaceSettingsView() {
     }
 
     const memberIds: string[] = Array.from(new Set<string>(organizationMemberIds.filter(id => users.some(user => user.id === id))));
-    const updatedOrganization: Organization = {
-      id: editingOrganizationId || `organization_${Date.now()}`,
+    const organizationId = editingOrganizationId || `organization_${Date.now()}`;
+    setIsSavingOrganization(true);
+    const result = await adminSaveOrganization({
+      id: organizationId,
       name,
       description: organizationDescription.trim() || undefined,
       logoUrl: organizationLogoUrl || undefined,
-      memberIds,
-      createdAt: editingOrganizationId
-        ? organizations.find(organization => organization.id === editingOrganizationId)?.createdAt || Date.now()
-        : Date.now()
-    };
-    const updatedOrganizations = editingOrganizationId
-      ? organizations.map(organization => organization.id === editingOrganizationId ? updatedOrganization : organization)
-      : [...organizations, updatedOrganization];
-    const updatedUsers = synchronizeUserOrganizationIds(updatedOrganizations, localUsers);
+      memberIds
+    });
+    setIsSavingOrganization(false);
+    if (!result.success || !result.organization) {
+      setOrganizationFormError(result.error || 'Unable to save this organization.');
+      return;
+    }
 
-    setOrganizations(updatedOrganizations);
-    setUsers(updatedUsers);
-    setLocalUsers(updatedUsers);
+    const savedOrganization = result.organization;
+    const updatedOrganizations = organizations.some(organization => organization.id === savedOrganization.id)
+      ? organizations.map(organization => organization.id === savedOrganization.id ? savedOrganization : organization)
+      : [...organizations, savedOrganization];
+    setLocalUsers(synchronizeUserOrganizationIds(updatedOrganizations, localUsers));
     setUserAddedSuccessToast(editingOrganizationId
       ? `${name} was updated successfully.`
       : `${name} was created successfully.`);
@@ -1271,7 +1274,7 @@ export function WorkspaceSettingsView() {
                     ))}
                   </div>
                 </div>
-                <div className="flex justify-end gap-2"><button type="button" onClick={() => { resetOrganizationForm(); setIsAddingOrganization(false); }} className="px-3 py-2 text-xs text-gray-400 hover:text-white">Cancel</button><button type="submit" className="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold">{editingOrganizationId ? 'Save changes' : 'Create organization'}</button></div>
+                <div className="flex justify-end gap-2"><button type="button" onClick={() => { resetOrganizationForm(); setIsAddingOrganization(false); }} className="px-3 py-2 text-xs text-gray-400 hover:text-white">Cancel</button><button type="submit" disabled={isSavingOrganization} className="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-60 disabled:cursor-not-allowed text-white text-xs font-bold">{isSavingOrganization ? 'Saving…' : editingOrganizationId ? 'Save changes' : 'Create organization'}</button></div>
               </form>
             )}
 
