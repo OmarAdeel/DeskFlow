@@ -45,7 +45,8 @@ export default function App() {
     channels,
     users,
     currentUser,
-    activeOrganizationId
+    activeOrganizationId,
+    dmUnreadByUserId
   } = useWorkspace();
 
   const [currentView, setCurrentView] = useState<ViewType>('unreads');
@@ -303,7 +304,10 @@ export default function App() {
           onClick={() => navigateToView('dms')}
           className={`flex flex-col items-center justify-center flex-1 py-1 transition cursor-pointer ${currentView === 'dms' ? 'text-blue-400 font-bold' : 'hover:text-gray-200'}`}
         >
-          <MessageSquare className="h-5 w-5" />
+          <span className="relative">
+            <MessageSquare className="h-5 w-5" />
+            {Object.values(dmUnreadByUserId as Record<string, number>).some((count: number) => count > 0) && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500" aria-label="Unread direct messages" />}
+          </span>
           <span className="text-[10px] mt-0.5">DMs</span>
         </button>
         <button

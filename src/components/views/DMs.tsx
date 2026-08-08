@@ -12,7 +12,7 @@ import { FormattedMessage } from '../FormattedMessage';
 import { PresenceDot, UserAvatar, presenceLabel } from '../UserAvatar';
 import { DisplayName } from '../DisplayName';
 import { AgentConversationMessage, buildAgentWorkspaceContext, requestAgentReply } from '../../utils/agentResponse';
-import { showDeskFlowNotification } from '../../hooks/useWebAppFeatures';
+
 
 interface DMReply {
   id: string;
@@ -35,9 +35,8 @@ interface DMMessage {
 }
 
 export function DMsView({ userId }: { userId?: string }) {
-  const { users, currentUser, presenceByUserId, userStatus, organizations, agents, messages, channels, activeOrganizationId, isAuthenticated } = useWorkspace();
+  const { users, currentUser, presenceByUserId, userStatus, organizations, agents, messages, channels, activeOrganizationId, isAuthenticated, dmUnreadByUserId, markDmRead } = useWorkspace();
   const usersRef = useRef(users);
-  const [unreadByUserId, setUnreadByUserId] = useState<Record<string, number>>({});
   const organizationUsers = users.filter(user => {
     if (!activeOrganizationId) return true;
     return Boolean(user.organizationIds?.includes(activeOrganizationId));
@@ -50,7 +49,7 @@ export function DMsView({ userId }: { userId?: string }) {
     presence: u.isAgent ? 'online' as const : presenceByUserId[u.id]?.status || 'offline' as const,
     online: u.isAgent || presenceByUserId[u.id]?.status === 'online',
     lastSeen: presenceByUserId[u.id]?.lastSeenAt ? new Date(presenceByUserId[u.id].lastSeenAt!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'recently',
-    unread: unreadByUserId[u.id] || 0,
+    unread: dmUnreadByUserId[u.id] || 0,
     avatarUrl: u.avatarUrl,
     avatarSeed: u.name,
     isAgent: Boolean(u.isAgent)
@@ -67,10 +66,8 @@ export function DMsView({ userId }: { userId?: string }) {
 
   const [mobileShowChat, setMobileShowChat] = useState<boolean>(Boolean(userId));
   const dmConversationIdRef = useRef<string | null>(null);
-  const selectedUserRef = useRef(selectedUser);
 
   usersRef.current = users;
-  selectedUserRef.current = selectedUser;
 
   useEffect(() => {
     const match = userId ? systemUsers.find(u => u.id === userId) : undefined;
@@ -156,14 +153,8 @@ export function DMsView({ userId }: { userId?: string }) {
       ? `workspace_dm_read_${currentUser.id}_${activeOrganizationId}_${selectedUser.id}`
       : '';
     const readAt = (readKey && localStorage.getItem(readKey)) || new Date().toISOString();
-    dmReadAtRef.current[selectedUser.id] = readAt;
     if (readKey) localStorage.setItem(readKey, readAt);
-    setUnreadByUserId(previous => {
-      if (!previous[selectedUser.id]) return previous;
-      const next = { ...previous };
-      delete next[selectedUser.id];
-      return next;
-    });
+    markDmRead(selectedUser.id);
   }, [selectedUser.id, currentUser?.id, activeOrganizationId]);
 
   const handleDmTextChange = (text: string) => {
@@ -811,11 +802,7 @@ export function DMsView({ userId }: { userId?: string }) {
   const [remoteDmLoaded, setRemoteDmLoaded] = useState(false);
   const [dmSyncError, setDmSyncError] = useState<string | null>(null);
   const remoteDmRequestRef = useRef(0);
-  const dmInboxRequestRef = useRef(0);
-  const dmInboxInitializedRef = useRef(false);
-  const seenDmMessageIdsRef = useRef<Set<string>>(new Set());
-  const notifiedDmMessageIdsRef = useRef<Set<string>>(new Set());
-  const dmReadAtRef = useRef<Record<string, string>>({});
+
   dmConversationIdRef.current = dmConversationId;
 
   useEffect(() => {
@@ -1021,86 +1008,6 @@ export function DMsView({ userId }: { userId?: string }) {
     return () => { void supabase.removeChannel(realtimeChannel); };
   }, [dmConversationId, currentUser?.id, selectedUser.id]);
 
-  // Listen for every direct message in the active workspace, not just the
-  // conversation currently open. This drives list badges and background alerts.
-  useEffect(() => {
-    if (!isAuthenticated || !currentUser?.id || !activeOrganizationId) return;
-    const realtimeChannel = supabase.channel(`deskflow-all-dms-${currentUser.id}-${activeOrganizationId}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
-        const row = payload.new as { id?: string; organization_id?: string; conversation_id?: string | null; sender_id?: string; content?: string; created_at?: string; parent_message_id?: string | null };
-        if (!row.id || !row.conversation_id || !row.sender_id || !row.created_at || row.sender_id === currentUser.id) return;
-        if (row.organization_id && row.organization_id !== activeOrganizationId) return;
-        if (seenDmMessageIdsRef.current.has(row.id)) return;
-        seenDmMessageIdsRef.current.add(row.id);
-        const sender = usersRef.current.find(user => user.id === row.sender_id);
-        if (!sender || sender.isAgent) return;
-
-        const isCurrentConversation = row.conversation_id === dmConversationIdRef.current;
-        if (!isCurrentConversation) {
-          setUnreadByUserId(previous => ({ ...previous, [sender.id]: (previous[sender.id] || 0) + 1 }));
-        }
-
-        if (!isCurrentConversation && document.visibilityState === 'visible') {
-          void showDeskFlowNotification(`${sender.name} sent you a direct message`, {
-            body: String(row.content || 'Sent a new direct message').slice(0, 180),
-            tag: `deskflow-dm-${row.id}`,
-            data: { url: `${window.location.pathname}?view=dms&userId=${encodeURIComponent(sender.id)}` }
-          });
-        }
-      })
-      .subscribe();
-
-    const pollInbox = async () => {
-      const inboxRequestId = ++dmInboxRequestRef.current;
-      const { data: rows, error } = await supabase
-        .from('messages')
-        .select('id,conversation_id,sender_id,content,created_at,organization_id')
-        .eq('organization_id', activeOrganizationId)
-        .not('conversation_id', 'is', null)
-        .neq('sender_id', currentUser.id)
-        .order('created_at', { ascending: false })
-        .limit(100);
-      if (error || inboxRequestId !== dmInboxRequestRef.current) return;
-
-      const unreadCounts: Record<string, number> = {};
-      const rowsToNotify: typeof rows = [];
-      for (const row of rows || []) {
-        if (!row.id || !row.sender_id || !row.conversation_id) continue;
-        const sender = usersRef.current.find(user => user.id === row.sender_id);
-        if (!sender || sender.isAgent) continue;
-        const readKey = `workspace_dm_read_${currentUser.id}_${activeOrganizationId}_${sender.id}`;
-        const readAt = dmReadAtRef.current[sender.id] || localStorage.getItem(readKey) || '';
-        if (readAt) dmReadAtRef.current[sender.id] = readAt;
-        if (readAt && row.created_at && row.created_at <= readAt) continue;
-        if (!seenDmMessageIdsRef.current.has(row.id)) {
-          seenDmMessageIdsRef.current.add(row.id);
-          if (dmInboxInitializedRef.current) rowsToNotify.push(row);
-        }
-        if (row.conversation_id !== dmConversationIdRef.current) {
-          unreadCounts[sender.id] = (unreadCounts[sender.id] || 0) + 1;
-        }
-      }
-      dmInboxInitializedRef.current = true;
-      setUnreadByUserId(unreadCounts);
-      for (const row of rowsToNotify) {
-        if (notifiedDmMessageIdsRef.current.has(row.id)) continue;
-        notifiedDmMessageIdsRef.current.add(row.id);
-        const sender = usersRef.current.find(user => user.id === row.sender_id);
-        if (!sender || row.conversation_id === dmConversationIdRef.current) continue;
-        void showDeskFlowNotification(`${sender.name} sent you a direct message`, {
-          body: String(row.content || 'Sent a new direct message').slice(0, 180),
-          tag: `deskflow-dm-${row.id}`,
-          data: { url: `${window.location.pathname}?view=dms&userId=${encodeURIComponent(sender.id)}` }
-        });
-      }
-    };
-    void pollInbox();
-    const pollTimer = window.setInterval(() => { void pollInbox(); }, 5000);
-    return () => {
-      window.clearInterval(pollTimer);
-      void supabase.removeChannel(realtimeChannel);
-    };
-  }, [activeOrganizationId, currentUser?.id, isAuthenticated]);
 
   const persistDmMessage = async (target: typeof systemUsers[0], text: string, parentMessageId?: string): Promise<DMMessage | null> => {
     if (!currentUser?.id || !activeOrganizationId || target.isAgent) return null;
@@ -1507,12 +1414,7 @@ export function DMsView({ userId }: { userId?: string }) {
                 key={user.id} 
                 onClick={() => {
                   setSelectedUser(user);
-                  setUnreadByUserId(previous => {
-                    if (!previous[user.id]) return previous;
-                    const next = { ...previous };
-                    delete next[user.id];
-                    return next;
-                  });
+                  markDmRead(user.id);
                   setShowMainEmojiPicker(false);
                   setActiveReactionMessageId(null);
                   setActiveThreadId(null);

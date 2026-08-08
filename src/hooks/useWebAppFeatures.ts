@@ -93,6 +93,14 @@ export function useWebAppFeatures() {
     }
     localStorage.setItem(NOTIFICATIONS_ENABLED_KEY, 'true');
     setNotificationsEnabled(true);
+    try {
+      await showDeskFlowNotification('DeskFlow notifications enabled', {
+        body: 'You will receive alerts for new direct messages.',
+        tag: 'deskflow-notifications-enabled'
+      });
+    } catch (error) {
+      console.error('Unable to display the notification test.', error);
+    }
     return { success: true, message: 'Browser notifications are enabled.' };
   };
 
@@ -101,7 +109,7 @@ export function useWebAppFeatures() {
 
 export async function showDeskFlowNotification(title: string, options: NotificationOptions = {}) {
   if (!('Notification' in window) || Notification.permission !== 'granted' || localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) !== 'true') return;
-  const registration = await navigator.serviceWorker?.ready.catch(() => null);
+  const registration = await navigator.serviceWorker?.getRegistration().catch(() => undefined);
   if (registration) {
     await registration.showNotification(title, { icon: '/deskflow-icon-192.png', badge: '/deskflow-icon-192.png', ...options });
   } else {

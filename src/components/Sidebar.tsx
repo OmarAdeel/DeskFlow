@@ -31,7 +31,8 @@ export function Sidebar({ currentView, currentChannelId, width = 260, onViewChan
     activeOrganizationId,
     activeOrganization,
     accessibleOrganizations,
-    setActiveOrganizationId
+    setActiveOrganizationId,
+    dmUnreadByUserId
   } = useWorkspace();
   const visibleChannels = channels.filter(channel => canAccessChannel(channel, currentUser, activeOrganizationId));
   const visibleDmUsers = users.filter(user => {
@@ -196,7 +197,11 @@ export function Sidebar({ currentView, currentChannelId, width = 260, onViewChan
           ))}
         </div>
 
-        <SectionHeader label={getTranslation(userLanguage, 'directMessages')} icon={ChevronDown} />
+        <div className="flex items-center px-4 py-1.5 mt-3 text-gray-400">
+          <ChevronDown className={`h-3 w-3 ${isArabic ? 'ml-1.5' : 'mr-1.5'} opacity-70`} strokeWidth={2.5} />
+          <span className="text-[13px] font-medium flex-1 truncate">{getTranslation(userLanguage, 'directMessages')}</span>
+          {Object.values(dmUnreadByUserId as Record<string, number>).some((count: number) => count > 0) && <span className="h-2.5 w-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.7)]" aria-label="Unread direct messages" />}
+        </div>
         <div className="space-y-[2px] px-2">
           {visibleDmUsers.map((user) => {
              const isSelected = currentView === 'dms' && currentChannelId === user.id;
@@ -215,6 +220,7 @@ export function Sidebar({ currentView, currentChannelId, width = 260, onViewChan
                    <PresenceDot status={user.isAgent ? 'online' : presenceByUserId[user.id]?.status || 'offline'} className="absolute -bottom-0.5 -right-0.5 h-2 w-2" />
                  </div>
                  <span className="truncate flex-1 text-left rtl:text-right">{user.name}</span>
+                 {dmUnreadByUserId[user.id] > 0 && <span className="h-2.5 w-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.7)] shrink-0" aria-label={`${dmUnreadByUserId[user.id]} unread messages`} />}
                </button>
              );
           })}

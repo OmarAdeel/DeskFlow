@@ -174,6 +174,8 @@ interface WorkspaceContextProps {
   setDrafts: (drafts: Draft[]) => void;
   savedItems: string[];
   setSavedItems: React.Dispatch<React.SetStateAction<string[]>>;
+  dmUnreadByUserId: Record<string, number>;
+  markDmRead: (userId: string) => void;
   currentUser: WorkspaceUser | undefined;
   presenceByUserId: Record<string, UserPresence>;
   isAuthenticated: boolean;
@@ -313,6 +315,10 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
   const [drafts, setDrafts] = useState<Draft[]>([]);
 
   const [savedItems, setSavedItemsState] = useState<string[]>([]);
+  const [dmUnreadByUserId, setDmUnreadByUserId] = useState<Record<string, number>>({});
+  const dmInboxInitializedRef = useRef(false);
+  const dmSeenMessageIdsRef = useRef<Set<string>>(new Set());
+  const dmNotifiedMessageIdsRef = useRef<Set<string>>(new Set());
 
   const syncedMessagesRef = useRef<Message[]>([]);
   const syncedSavedItemsRef = useRef<string[]>([]);
@@ -1067,14 +1073,86 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     };
   }, [authenticatedUserId, isAuthenticated, userStatus, users]);
 
+  const markDmRead = (userId: string) => {
+    if (!authenticatedUserId || !activeOrganizationId || !userId) return;
+    const readAt = new Date().toISOString();
+    localStorage.setItem(`workspace_dm_read_${authenticatedUserId}_${activeOrganizationId}_${userId}`, readAt);
+    setDmUnreadByUserId(previous => {
+      if (!previous[userId]) return previous;
+      const next = { ...previous };
+      delete next[userId];
+      return next;
+    });
+  };
+
   useEffect(() => {
-    if (!isAuthenticated || !authenticatedUserId || !currentUser) return;
+    if (!isAuthenticated || !authenticatedUserId || !currentUser || !activeOrganizationId) {
+      setDmUnreadByUserId({});
+      dmInboxInitializedRef.current = false;
+      dmSeenMessageIdsRef.current.clear();
+      dmNotifiedMessageIdsRef.current.clear();
+      return;
+    }
+
+    const pollDmInbox = async () => {
+      const { data: rows, error } = await supabase
+        .from('messages')
+        .select('id,conversation_id,sender_id,content,created_at,organization_id')
+        .eq('organization_id', activeOrganizationId)
+        .not('conversation_id', 'is', null)
+        .neq('sender_id', authenticatedUserId)
+        .order('created_at', { ascending: false })
+        .limit(100);
+      if (error) {
+        console.error('Unable to poll direct message inbox.', error);
+        return;
+      }
+
+      const unreadCounts: Record<string, number> = {};
+      const newRows: any[] = [];
+      for (const row of rows || []) {
+        if (!row.id || !row.sender_id || !row.created_at) continue;
+        const sender = users.find(user => user.id === row.sender_id);
+        if (!sender || sender.isAgent) continue;
+        const readAt = localStorage.getItem(`workspace_dm_read_${authenticatedUserId}_${activeOrganizationId}_${sender.id}`) || '';
+        if (readAt && row.created_at <= readAt) continue;
+        unreadCounts[sender.id] = (unreadCounts[sender.id] || 0) + 1;
+        if (!dmSeenMessageIdsRef.current.has(row.id)) {
+          dmSeenMessageIdsRef.current.add(row.id);
+          if (dmInboxInitializedRef.current) newRows.push(row);
+        }
+      }
+      dmInboxInitializedRef.current = true;
+      setDmUnreadByUserId(unreadCounts);
+
+      for (const row of newRows) {
+        if (dmNotifiedMessageIdsRef.current.has(row.id)) continue;
+        dmNotifiedMessageIdsRef.current.add(row.id);
+        const sender = users.find(user => user.id === row.sender_id);
+        if (!sender) continue;
+        void showDeskFlowNotification(`${sender.name} sent you a direct message`, {
+          body: String(row.content || 'Sent a new direct message').slice(0, 180),
+          tag: `deskflow-dm-${row.id}`,
+          data: { url: `${window.location.pathname}?view=dms&userId=${encodeURIComponent(sender.id)}` }
+        });
+      }
+    };
+
+    void pollDmInbox();
+    const pollTimer = window.setInterval(() => { void pollDmInbox(); }, 3000);
+
     const channel = supabase.channel(`deskflow-message-notifications-${authenticatedUserId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
         const row = payload.new as { id?: string; organization_id?: string; channel_id?: string | null; conversation_id?: string | null; sender_id?: string; content?: string; parent_message_id?: string | null };
-        if (document.visibilityState === 'visible' || !row.id || !row.sender_id || row.sender_id === authenticatedUserId) return;
+        if (!row.id || !row.sender_id || row.sender_id === authenticatedUserId) return;
         const sender = users.find(user => user.id === row.sender_id);
         if (row.conversation_id && row.organization_id === activeOrganizationId) {
+          if (dmSeenMessageIdsRef.current.has(row.id)) return;
+          dmSeenMessageIdsRef.current.add(row.id);
+          // Browser notifications are useful even while DeskFlow is open: the
+          // recipient may be working in another view or window. The message
+          // id set above prevents this realtime event from being notified again
+          // by the polling fallback.
           void showDeskFlowNotification(`${sender?.name || 'A teammate'} sent you a direct message`, {
             body: String(row.content || 'Sent a new direct message').slice(0, 180),
             tag: `deskflow-dm-${row.id}`,
@@ -1094,7 +1172,10 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
         });
       })
       .subscribe();
-    return () => { void supabase.removeChannel(channel); };
+    return () => {
+      window.clearInterval(pollTimer);
+      void supabase.removeChannel(channel);
+    };
   }, [activeOrganizationId, authenticatedUserId, channels, currentUser, isAuthenticated, users]);
 
   const accessibleOrganizations = currentUser?.role === 'Super Admin'
@@ -1215,6 +1296,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       messages, setMessages,
       drafts, setDrafts,
       savedItems, setSavedItems,
+      dmUnreadByUserId, markDmRead,
       currentUser,
       presenceByUserId,
       isAuthenticated, isAuthInitialized, isPasswordRecovery, login, logout,
