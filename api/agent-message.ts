@@ -99,25 +99,37 @@ export default async function handler(request: Request, response: Response) {
     }
 
     if (parentMessageId) {
-      const parentResponse = await fetch(`${supabaseUrl}/rest/v1/messages?id=eq.${encodeURIComponent(parentMessageId)}&channel_id=eq.${encodeURIComponent(channelId)}&select=id`, {
-        headers: { ...adminHeaders, Accept: 'application/vnd.pgrst.object+json' }
-      });
-      if (!parentResponse.ok || !await parentResponse.json()) {
+      const parentQuery = `channel_id=eq.${encodeURIComponent(channelId)}&id=eq.${encodeURIComponent(parentMessageId)}&select=id`;
+      const [humanParentResponse, agentParentResponse] = await Promise.all([
+        fetch(`${supabaseUrl}/rest/v1/messages?${parentQuery}`, {
+          headers: { ...adminHeaders, Accept: 'application/vnd.pgrst.object+json' }
+        }),
+        fetch(`${supabaseUrl}/rest/v1/agent_messages?${parentQuery}`, {
+          headers: { ...adminHeaders, Accept: 'application/vnd.pgrst.object+json' }
+        })
+      ]);
+      const humanParent = humanParentResponse.ok ? await humanParentResponse.json() : null;
+      const agentParent = agentParentResponse.ok ? await agentParentResponse.json() : null;
+      if (!humanParent && !agentParent) {
         return sendJson(response, 403, { error: 'The parent message was not found in this channel.' });
       }
     }
 
-    const insert = await fetch(`${supabaseUrl}/rest/v1/messages?on_conflict=id`, {
+    // Agent IDs are text keys from public.agents, while messages.sender_id is a
+    // profile UUID with a foreign key. Keep those two identities separate so a
+    // successful response is not only present in the sender's React state.
+    const insert = await fetch(`${supabaseUrl}/rest/v1/agent_messages?on_conflict=id`, {
       method: 'POST',
       headers: { ...adminHeaders, Prefer: 'resolution=merge-duplicates,return=minimal' },
       body: JSON.stringify({
         id: messageId,
         organization_id: organizationId,
         channel_id: channelId,
-        sender_id: senderId,
+        agent_id: senderId,
         parent_message_id: parentMessageId,
         content,
-        created_at: createdAt || undefined
+        created_at: createdAt || undefined,
+        updated_at: new Date().toISOString()
       })
     });
     if (!insert.ok) throw new Error((await insert.text()) || 'Unable to save the agent message.');

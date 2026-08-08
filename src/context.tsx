@@ -239,6 +239,7 @@ const defaultUsers: WorkspaceUser[] = [
 // Avoid retrying the same 404 during auth/workspace rehydration; the migration
 // remains required before agent channel membership can be persisted.
 let channelAgentsTableAvailable: boolean | null = null;
+let agentMessagesTableAvailable: boolean | null = null;
 
 function passwordMeetsRequirements(password: string): boolean {
   return password.length >= 8;
@@ -615,6 +616,17 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       if (!result.error) channelAgentsTableAvailable = true;
       return result;
     };
+    const loadAgentMessages = async () => {
+      if (agentMessagesTableAvailable === false) return { data: [], error: null };
+      const result = await supabase.from('agent_messages').select('*').order('created_at');
+      if (result.error?.code === 'PGRST205') {
+        agentMessagesTableAvailable = false;
+        console.warn('The agent_messages table is not installed. Apply scripts/supabase-agent-messages.sql before asking agents to reply.');
+        return { data: [], error: null };
+      }
+      if (!result.error) agentMessagesTableAvailable = true;
+      return result;
+    };
     const results = await Promise.all([
       supabase.from('profiles').select('*'),
       supabase.from('organizations').select('*').order('created_at'),
@@ -623,6 +635,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       supabase.from('channel_members').select('*'),
       loadChannelAgents(),
       supabase.from('messages').select('*').order('created_at'),
+      loadAgentMessages(),
       supabase.from('message_reactions').select('*'),
       supabase.from('saved_items').select('message_id'),
       supabase.from('agents').select('*').order('created_at')
@@ -630,7 +643,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     if (generation !== hydrationGenerationRef.current) return;
     const failed = results.find(result => result.error);
     if (failed?.error) throw failed.error;
-    const [profiles, organizationRows, membershipRows, channelRows, channelMembershipRows, channelAgentRows, messageRows, reactionRows, savedRows, agentRows] = results.map(result => result.data || []);
+    const [profiles, organizationRows, membershipRows, channelRows, channelMembershipRows, channelAgentRows, messageRows, agentMessageRows, reactionRows, savedRows, agentRows] = results.map(result => result.data || []);
 
     const nextUsers: WorkspaceUser[] = profiles.map((profile: any) => ({
       id: profile.id, name: profile.name, email: profile.email, username: profile.username || undefined,
@@ -654,17 +667,35 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       agentIds: channelAgentRows.filter((member: any) => member.channel_id === channel.id).map((member: any) => member.agent_id)
     }));
     const replies = new Map<string, Reply[]>();
+    const addReply = (parentId: string, reply: Reply) => {
+      const existing = replies.get(parentId) || [];
+      if (!existing.some(item => item.id === reply.id)) existing.push(reply);
+      replies.set(parentId, existing);
+    };
     for (const row of messageRows.filter((message: any) => message.parent_message_id) as any[]) {
-      const existing = replies.get(row.parent_message_id) || [];
-      existing.push({ id: row.id, senderId: row.sender_id, text: row.content, timestamp: new Date(row.created_at).getTime(), isRead: true,
-        reactions: reactionRows.filter((reaction: any) => reaction.message_id === row.id).map((reaction: any) => reaction.emoji) });
-      replies.set(row.parent_message_id, existing);
+      addReply(row.parent_message_id, {
+        id: row.id, senderId: row.sender_id, text: row.content, timestamp: new Date(row.created_at).getTime(), isRead: true,
+        reactions: reactionRows.filter((reaction: any) => reaction.message_id === row.id).map((reaction: any) => reaction.emoji)
+      });
     }
-    const nextMessages: Message[] = (messageRows as any[]).filter(row => !row.parent_message_id && row.channel_id).map(row => ({
-      id: row.id, channelId: row.channel_id, senderId: row.sender_id, text: row.content,
-      timestamp: new Date(row.created_at).getTime(), isRead: true, replies: replies.get(row.id) || [],
-      reactions: reactionRows.filter((reaction: any) => reaction.message_id === row.id).map((reaction: any) => reaction.emoji)
-    }));
+    for (const row of agentMessageRows as any[]) {
+      if (row.parent_message_id) {
+        addReply(row.parent_message_id, {
+          id: row.id, senderId: row.agent_id, text: row.content, timestamp: new Date(row.created_at).getTime(), isRead: true, reactions: []
+        });
+      }
+    }
+    const nextMessages: Message[] = [
+      ...(messageRows as any[]).filter(row => !row.parent_message_id && row.channel_id).map(row => ({
+        id: row.id, channelId: row.channel_id, senderId: row.sender_id, text: row.content,
+        timestamp: new Date(row.created_at).getTime(), isRead: true, replies: replies.get(row.id) || [],
+        reactions: reactionRows.filter((reaction: any) => reaction.message_id === row.id).map((reaction: any) => reaction.emoji)
+      })),
+      ...(agentMessageRows as any[]).filter(row => !row.parent_message_id && row.channel_id).map(row => ({
+        id: row.id, channelId: row.channel_id, senderId: row.agent_id, text: row.content,
+        timestamp: new Date(row.created_at).getTime(), isRead: true, replies: replies.get(row.id) || [], reactions: []
+      }))
+    ].sort((a, b) => a.timestamp - b.timestamp);
     const nextSavedItems = savedRows.map((item: any) => item.message_id);
     let localAgentKeys: Record<string, string> = {};
     try { localAgentKeys = JSON.parse(localStorage.getItem(`workspace_agent_keys_${authUser.id}`) || '{}'); } catch { localAgentKeys = {}; }
@@ -1190,6 +1221,55 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       void supabase.removeChannel(presenceChannel);
     };
   }, [authenticatedUserId, isAuthenticated, userStatus, users]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !authenticatedUserId || !currentUser || !activeOrganizationId || agentMessagesTableAvailable === false) return;
+
+    const realtimeChannel = supabase.channel(`deskflow-agent-messages-${authenticatedUserId}-${activeOrganizationId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'agent_messages', filter: `organization_id=eq.${activeOrganizationId}` }, payload => {
+        const row = payload.new as {
+          id?: string;
+          organization_id?: string;
+          channel_id?: string;
+          agent_id?: string;
+          parent_message_id?: string | null;
+          content?: string;
+          created_at?: string;
+        };
+        if (!row.id || !row.channel_id || !row.agent_id || !row.created_at || row.organization_id !== activeOrganizationId) return;
+        const targetChannel = channels.find(channel => channel.id === row.channel_id);
+        if (!targetChannel || !canAccessChannel(targetChannel, currentUser, activeOrganizationId)) return;
+
+        const incomingTimestamp = new Date(row.created_at).getTime();
+        setMessagesState(previous => {
+          if (previous.some(message => message.id === row.id || message.replies.some(reply => reply.id === row.id))) return previous;
+          if (row.parent_message_id) {
+            const parentExists = previous.some(message => message.id === row.parent_message_id || message.replies.some(reply => reply.id === row.parent_message_id));
+            if (!parentExists) return previous;
+            return previous.map(message => message.id === row.parent_message_id
+              ? { ...message, replies: [...message.replies, { id: row.id as string, senderId: row.agent_id as string, text: String(row.content || ''), timestamp: incomingTimestamp, isRead: true, reactions: [] }] }
+              : message);
+          }
+          return [...previous, {
+            id: row.id as string,
+            channelId: row.channel_id as string,
+            senderId: row.agent_id as string,
+            text: String(row.content || ''),
+            timestamp: incomingTimestamp,
+            isRead: true,
+            replies: [],
+            reactions: []
+          }].sort((left, right) => left.timestamp - right.timestamp);
+        });
+      })
+      .subscribe(status => {
+        if (status === 'CHANNEL_ERROR') {
+          console.error('Unable to subscribe to persisted agent messages. Apply scripts/supabase-agent-messages.sql in Supabase.');
+        }
+      });
+
+    return () => { void supabase.removeChannel(realtimeChannel); };
+  }, [activeOrganizationId, agents, authenticatedUserId, channels, currentUser, isAuthenticated]);
 
   const markDmRead = (userId: string) => {
     if (!authenticatedUserId || !activeOrganizationId || !userId) return;

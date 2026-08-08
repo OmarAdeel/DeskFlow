@@ -102,6 +102,7 @@ create table if not exists public.messages (
   check ((channel_id is not null)::int + (conversation_id is not null)::int = 1)
 );
 
+
 create table if not exists public.message_reactions (
   message_id text not null references public.messages(id) on delete cascade,
   user_id uuid not null references public.profiles(id) on delete cascade,
@@ -207,6 +208,19 @@ create table if not exists public.agents (
   updated_at timestamptz not null default now()
 );
 
+-- Agent IDs are text keys and cannot be stored in messages.sender_id, which is a
+-- profile UUID. Agent-authored channel messages live in this normalized table.
+create table if not exists public.agent_messages (
+  id text primary key,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  channel_id text not null references public.channels(id) on delete cascade,
+  agent_id text not null references public.agents(id) on delete cascade,
+  parent_message_id text,
+  content text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists private.agent_secrets (
   agent_id text primary key references public.agents(id) on delete cascade,
   encrypted_api_key text not null,
@@ -234,6 +248,8 @@ create index if not exists channels_organization_idx on public.channels(organiza
 create index if not exists messages_channel_created_idx on public.messages(channel_id, created_at);
 create index if not exists messages_conversation_created_idx on public.messages(conversation_id, created_at);
 create index if not exists messages_parent_idx on public.messages(parent_message_id);
+create index if not exists agent_messages_channel_created_idx on public.agent_messages(channel_id, created_at);
+create index if not exists agent_messages_parent_idx on public.agent_messages(parent_message_id);
 create index if not exists organization_members_user_idx on public.organization_members(user_id);
 
 do $$
@@ -243,6 +259,12 @@ begin
     where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'messages'
   ) then
     alter publication supabase_realtime add table public.messages;
+  end if;
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'agent_messages'
+  ) then
+    alter publication supabase_realtime add table public.agent_messages;
   end if;
   if not exists (
     select 1 from pg_publication_tables
@@ -398,6 +420,7 @@ alter table public.channel_agents enable row level security;
 alter table public.conversations enable row level security;
 alter table public.conversation_members enable row level security;
 alter table public.messages enable row level security;
+alter table public.agent_messages enable row level security;
 alter table public.message_reactions enable row level security;
 alter table public.message_reads enable row level security;
 alter table public.saved_items enable row level security;
@@ -417,7 +440,7 @@ begin
     select schemaname, tablename, policyname from pg_policies
     where schemaname = 'public' and tablename in (
       'profiles','organizations','organization_members','channels','channel_members','channel_agents','conversations',
-      'conversation_members','messages','message_reactions','message_reads','saved_items','tasks','contacts',
+      'conversation_members','messages','agent_messages','message_reactions','message_reads','saved_items','tasks','contacts',
       'deals','canvases','file_assets','agents','system_audit_logs'
     )
   loop
@@ -477,6 +500,13 @@ create policy conversation_members_insert on public.conversation_members for ins
 create policy messages_select on public.messages for select to authenticated using (
   private.is_organization_member(organization_id)
   and ((channel_id is not null and private.can_access_channel(channel_id)) or (conversation_id is not null and private.can_access_conversation(conversation_id)))
+);
+create policy agent_messages_select on public.agent_messages for select to authenticated using (
+  private.is_organization_member(organization_id)
+  and private.can_access_channel(channel_id)
+);
+create policy agent_messages_admin_delete on public.agent_messages for delete to authenticated using (
+  private.is_organization_admin(organization_id)
 );
 create policy messages_insert on public.messages for insert to authenticated with check (
   sender_id = auth.uid() and private.is_organization_member(organization_id)
