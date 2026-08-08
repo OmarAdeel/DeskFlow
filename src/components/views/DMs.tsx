@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import React, { useState, useEffect, useRef } from 'react';
 import { canAccessChannel, useWorkspace } from '../../context';
+import { supabase } from '../../lib/supabase';
 import { EmojiDeluxe } from '../EmojiDeluxe';
 import { FormattedMessage } from '../FormattedMessage';
 import { PresenceDot, UserAvatar, presenceLabel } from '../UserAvatar';
@@ -33,7 +34,7 @@ interface DMMessage {
 }
 
 export function DMsView({ userId }: { userId?: string }) {
-  const { users, currentUser, presenceByUserId, userStatus, organizations, agents, messages, channels, activeOrganizationId } = useWorkspace();
+  const { users, currentUser, presenceByUserId, userStatus, organizations, agents, messages, channels, activeOrganizationId, isAuthenticated } = useWorkspace();
   const organizationUsers = users.filter(user => {
     if (!activeOrganizationId) return true;
     return Boolean(user.organizationIds?.includes(activeOrganizationId));
@@ -71,7 +72,7 @@ export function DMsView({ userId }: { userId?: string }) {
       setMobileShowChat(true);
       return;
     }
-    const refreshedSelection = systemUsers.find(user => user.id === selectedUser.id);
+    const refreshedSelection = selectedUser && systemUsers.find(user => user.id === selectedUser.id);
     if (refreshedSelection) {
       setSelectedUser(refreshedSelection);
       return;
@@ -80,9 +81,9 @@ export function DMsView({ userId }: { userId?: string }) {
     if (nextUser) {
       setSelectedUser(nextUser);
       setActiveThreadId(null);
+      setMobileShowChat(false);
     }
-    setMobileShowChat(false);
-  }, [userId, users, activeOrganizationId, presenceByUserId]);
+  }, [userId, users, activeOrganizationId, presenceByUserId, currentUser?.id]);
 
   useEffect(() => {
     const handleIncomingComposeMessage = (event: Event) => {
@@ -776,20 +777,238 @@ export function DMsView({ userId }: { userId?: string }) {
   const [conversations, setConversations] = useState<Record<string, DMMessage[]>>(() => {
     const saved = localStorage.getItem('demo_conversations');
     if (saved) {
-      try { 
+      try {
         const parsed = JSON.parse(saved);
         return { ...defaultDMConversations, ...parsed };
-      } catch (e) { 
-        console.error(e); 
+      } catch (e) {
+        console.error(e);
       }
     }
     return defaultDMConversations;
   });
-
+  const [dmConversationId, setDmConversationId] = useState<string | null>(null);
+  const [remoteDmMessages, setRemoteDmMessages] = useState<DMMessage[]>([]);
+  const [remoteDmLoaded, setRemoteDmLoaded] = useState(false);
+  const [dmSyncError, setDmSyncError] = useState<string | null>(null);
+  const remoteDmRequestRef = useRef(0);
 
   useEffect(() => {
     localStorage.setItem('demo_conversations', JSON.stringify(conversations));
   }, [conversations]);
+
+  const getDmConversation = async (targetUserId: string, create = false): Promise<string | null> => {
+    if (!currentUser?.id || !activeOrganizationId || !targetUserId || targetUserId === currentUser.id) return null;
+
+    // Include the workspace in the key so the same two users can have isolated
+    // conversations in different organizations. Keep the old key as a lookup
+    // fallback for conversations created by an earlier build.
+    const scopedConversationId = `dm_${activeOrganizationId}_${[currentUser.id, targetUserId].sort().join('_')}`;
+    const legacyConversationId = `dm_${[currentUser.id, targetUserId].sort().join('_')}`;
+    const deterministicIds = scopedConversationId === legacyConversationId
+      ? [scopedConversationId]
+      : [scopedConversationId, legacyConversationId];
+    const { data: deterministicConversations, error: deterministicError } = await supabase
+      .from('conversations')
+      .select('id,organization_id,created_by')
+      .in('id', deterministicIds)
+      .eq('organization_id', activeOrganizationId);
+    if (deterministicError) throw deterministicError;
+    const deterministicConversation = (deterministicConversations || []).find(row => deterministicIds.includes(row.id as string));
+    if (deterministicConversation?.id) {
+      // Self-membership is always allowed by the workspace policy. Repair it
+      // even while merely opening the DM, because the other account may have
+      // created the conversation just before this lookup completed.
+      const { error: selfMembershipError } = await supabase.from('conversation_members').insert({
+        conversation_id: deterministicConversation.id,
+        user_id: currentUser.id
+      });
+      if (selfMembershipError && selfMembershipError.code !== '23505') throw selfMembershipError;
+
+      if (create && deterministicConversation.created_by === currentUser.id) {
+        const { error: targetMembershipInsertError } = await supabase.from('conversation_members').insert({
+          conversation_id: deterministicConversation.id,
+          user_id: targetUserId
+        });
+        if (targetMembershipInsertError && targetMembershipInsertError.code !== '23505') throw targetMembershipInsertError;
+      }
+      return deterministicConversation.id;
+    }
+
+    const { data: candidateRows, error: candidateError } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('organization_id', activeOrganizationId)
+      .eq('is_group', false);
+    if (candidateError) throw candidateError;
+
+    const candidateIds = (candidateRows || []).map(row => row.id as string);
+    if (candidateIds.length) {
+      const { data: memberRows, error: memberError } = await supabase
+        .from('conversation_members')
+        .select('conversation_id,user_id')
+        .in('conversation_id', candidateIds);
+      if (memberError) throw memberError;
+
+      const matchingConversation = candidateIds.find(id => {
+        const members = (memberRows || []).filter(row => row.conversation_id === id).map(row => row.user_id);
+        return members.length === 2 && members.includes(currentUser.id) && members.includes(targetUserId);
+      });
+      if (matchingConversation) return matchingConversation;
+    }
+
+    if (!create) return null;
+
+    // A deterministic id prevents duplicate 1:1 conversations if both users
+    // open the DM at the same time.
+    const conversationId = scopedConversationId;
+    const { error: conversationError } = await supabase.from('conversations').insert({
+      id: conversationId,
+      organization_id: activeOrganizationId,
+      is_group: false,
+      created_by: currentUser.id
+    });
+    if (conversationError && conversationError.code !== '23505') throw conversationError;
+
+    // The creator can add both members. If the conversation already existed,
+    // the other account may only add itself under RLS, so retry that narrower
+    // insert instead of failing the entire DM send.
+    const { error: membersError } = await supabase.from('conversation_members').insert([
+      { conversation_id: conversationId, user_id: currentUser.id },
+      { conversation_id: conversationId, user_id: targetUserId }
+    ]);
+    if (membersError && membersError.code !== '23505') {
+      const { error: selfMemberError } = await supabase.from('conversation_members').insert({
+        conversation_id: conversationId,
+        user_id: currentUser.id
+      });
+      if (selfMemberError && selfMemberError.code !== '23505') throw membersError;
+    }
+
+    // Confirm that this session is a member before trying to insert a message.
+    const { data: membership, error: membershipError } = await supabase
+      .from('conversation_members')
+      .select('conversation_id')
+      .eq('conversation_id', conversationId)
+      .eq('user_id', currentUser.id)
+      .maybeSingle();
+    if (membershipError) throw membershipError;
+    return membership?.conversation_id || null;
+  };
+
+  const toDmMessage = (row: { id: string; sender_id: string; content: string; created_at: string }, target: typeof systemUsers[0]): DMMessage => {
+    const isMe = row.sender_id === currentUser?.id;
+    const sender = users.find(user => user.id === row.sender_id);
+    return {
+      id: row.id,
+      senderId: row.sender_id,
+      senderName: isMe ? 'You' : sender?.name || target.name,
+      text: row.content,
+      timestamp: new Date(row.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      isMe,
+      reactions: [],
+      replies: []
+    };
+  };
+
+  const loadRemoteDm = async (target: typeof systemUsers[0]) => {
+    const requestId = ++remoteDmRequestRef.current;
+    setRemoteDmLoaded(false);
+    if (!currentUser?.id || !activeOrganizationId || target.isAgent) {
+      setDmConversationId(null);
+      setRemoteDmMessages([]);
+      setDmSyncError(null);
+      setRemoteDmLoaded(true);
+      return;
+    }
+
+    try {
+      setDmSyncError(null);
+      const conversationId = await getDmConversation(target.id);
+      if (requestId !== remoteDmRequestRef.current) return;
+      const realtimeConversationId = conversationId || `dm_${activeOrganizationId}_${[currentUser.id, target.id].sort().join('_')}`;
+      // Keep the deterministic id even before the first message exists. This
+      // lets the recipient subscribe before the sender creates the conversation.
+      setDmConversationId(realtimeConversationId);
+      if (!conversationId) {
+        setRemoteDmMessages([]);
+        setRemoteDmLoaded(true);
+        return;
+      }
+
+      const { data: rows, error } = await supabase
+        .from('messages')
+        .select('id,sender_id,content,created_at,parent_message_id')
+        .eq('conversation_id', conversationId)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      if (requestId !== remoteDmRequestRef.current) return;
+
+      const nextMessages: DMMessage[] = [];
+      const repliesByParent = new Map<string, DMReply[]>();
+      (rows || []).forEach(row => {
+        if (row.parent_message_id) {
+          const reply = toDmMessage(row, target);
+          const existing = repliesByParent.get(row.parent_message_id) || [];
+          existing.push({ id: reply.id, senderId: reply.senderId, senderName: reply.senderName, text: reply.text, timestamp: reply.timestamp, reactions: [] });
+          repliesByParent.set(row.parent_message_id, existing);
+        } else {
+          nextMessages.push(toDmMessage(row, target));
+        }
+      });
+      setRemoteDmMessages(nextMessages.map(message => ({ ...message, replies: repliesByParent.get(message.id) || [] })));
+      setRemoteDmLoaded(true);
+    } catch (error) {
+      if (requestId !== remoteDmRequestRef.current) return;
+      console.error('Unable to load direct messages.', error);
+      setDmConversationId(null);
+      setRemoteDmMessages([]);
+      setDmSyncError('Direct messages could not be synced. Check the workspace database setup.');
+      setRemoteDmLoaded(true);
+    }
+  };
+
+  useEffect(() => {
+    void loadRemoteDm(selectedUser);
+  }, [selectedUser.id, currentUser?.id, activeOrganizationId]);
+
+  useEffect(() => {
+    if (!dmConversationId || !currentUser?.id || selectedUser.isAgent) return;
+    const realtimeChannel = supabase.channel(`deskflow-dm-${dmConversationId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${dmConversationId}` }, payload => {
+        const row = payload.new as { id?: string; sender_id?: string; content?: string; created_at?: string; parent_message_id?: string | null };
+        if (!row.id || !row.sender_id || !row.created_at || row.sender_id === currentUser.id) return;
+        const incoming = toDmMessage({ id: row.id, sender_id: row.sender_id, content: String(row.content || ''), created_at: row.created_at }, selectedUser);
+        setRemoteDmMessages(previous => {
+          if (row.parent_message_id) {
+            return previous.map(message => message.id === row.parent_message_id
+              ? { ...message, replies: [...message.replies, { id: incoming.id, senderId: incoming.senderId, senderName: incoming.senderName, text: incoming.text, timestamp: incoming.timestamp, reactions: [] }] }
+              : message);
+          }
+          return previous.some(message => message.id === incoming.id) ? previous : [...previous, incoming];
+        });
+      })
+      .subscribe();
+    return () => { void supabase.removeChannel(realtimeChannel); };
+  }, [dmConversationId, currentUser?.id, selectedUser.id]);
+
+  const persistDmMessage = async (target: typeof systemUsers[0], text: string, parentMessageId?: string): Promise<DMMessage | null> => {
+    if (!currentUser?.id || !activeOrganizationId || target.isAgent) return null;
+    const conversationId = await getDmConversation(target.id, true);
+    if (!conversationId) return null;
+    const messageId = `dm_msg_${crypto.randomUUID()}`;
+    const { data, error } = await supabase.from('messages').insert({
+      id: messageId,
+      organization_id: activeOrganizationId,
+      conversation_id: conversationId,
+      sender_id: currentUser.id,
+      parent_message_id: parentMessageId || null,
+      content: text
+    }).select('id,sender_id,content,created_at').single();
+    if (error) throw error;
+    setDmConversationId(conversationId);
+    setRemoteDmLoaded(true);
+    return toDmMessage(data, target);
+  };
 
   // Filter users by search
   const filteredUsers = systemUsers.filter(u => u.id !== currentUser?.id && (
@@ -834,9 +1053,12 @@ export function DMsView({ userId }: { userId?: string }) {
   };
 
   const currentMsgs = conversations[selectedUser.id];
-  const activeMessages = (currentMsgs && currentMsgs.length > 0)
+  const localMessages = (currentMsgs && currentMsgs.length > 0)
     ? currentMsgs
     : (defaultDMConversations[selectedUser.id] || getFallbackMessages(selectedUser));
+  const activeMessages = !selectedUser.isAgent && isAuthenticated
+    ? (remoteDmLoaded ? remoteDmMessages : [])
+    : localMessages;
 
   const activeThread = activeMessages.find(m => m.id === activeThreadId);
   const activeMessagesScrollKey = activeMessages
@@ -1034,22 +1256,29 @@ export function DMsView({ userId }: { userId?: string }) {
       id: `new_dm_${Date.now()}`,
       senderId: currentUser?.id || '8',
       senderName: 'You',
-      text: dmText,
+      text: outgoingText,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       isMe: true,
       reactions: [],
       replies: []
     };
 
-    setConversations(prev => ({
-      ...prev,
-      [selectedUser.id]: [...(prev[selectedUser.id] || []), newMsg]
-    }));
-
     if (selectedUser.isAgent) {
+      setConversations(prev => ({
+        ...prev,
+        [selectedUser.id]: [...(prev[selectedUser.id] || []), newMsg]
+      }));
       respondAsAgent(selectedUser, outgoingText);
+    } else {
+      void persistDmMessage(selectedUser, outgoingText).then(savedMessage => {
+        if (!savedMessage) return;
+        setRemoteDmMessages(previous => previous.some(message => message.id === savedMessage.id) ? previous : [...previous, savedMessage]);
+      }).catch(error => {
+        console.error('Unable to send direct message.', error);
+        setDmSyncError('Your message could not be sent. Check the workspace database setup.');
+      });
     }
-    
+
     // Clear typing and draft
     setDmText('');
     setDmDrafts(prev => ({ ...prev, [selectedUser.id]: '' }));
@@ -1070,25 +1299,23 @@ export function DMsView({ userId }: { userId?: string }) {
       reactions: []
     };
 
-    setConversations(prev => {
-      const msgs = prev[selectedUser.id] || [];
-      const updated = msgs.map(m => {
-        if (m.id === activeThreadId) {
-          return {
-            ...m,
-            replies: [...(m.replies || []), reply]
-          };
-        }
-        return m;
-      });
-      return {
-        ...prev,
-        [selectedUser.id]: updated
-      };
-    });
-
     if (selectedUser.isAgent) {
+      setConversations(prev => {
+        const msgs = prev[selectedUser.id] || [];
+        const updated = msgs.map(m => m.id === activeThreadId ? { ...m, replies: [...(m.replies || []), reply] } : m);
+        return { ...prev, [selectedUser.id]: updated };
+      });
       respondAsAgent(selectedUser, threadReply, activeThreadId);
+    } else {
+      void persistDmMessage(selectedUser, threadReply, activeThreadId).then(savedReply => {
+        if (!savedReply) return;
+        setRemoteDmMessages(previous => previous.map(message => message.id === activeThreadId
+          ? { ...message, replies: [...message.replies, { id: savedReply.id, senderId: savedReply.senderId, senderName: savedReply.senderName, text: savedReply.text, timestamp: savedReply.timestamp, reactions: [] }] }
+          : message));
+      }).catch(error => {
+        console.error('Unable to send direct message reply.', error);
+        setDmSyncError('Your reply could not be sent. Check the workspace database setup.');
+      });
     }
 
     setThreadReply('');
@@ -1252,6 +1479,11 @@ export function DMsView({ userId }: { userId?: string }) {
 
         {/* Messaging History */}
         <div ref={dmMessagesContainerRef} className="flex-1 p-6 overflow-y-auto space-y-4 bg-[#1A1D21] custom-scrollbar">
+          {dmSyncError && !selectedUser.isAgent && (
+            <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+              {dmSyncError}
+            </div>
+          )}
           <div className="flex justify-center mb-6">
             <span className="text-[10px] text-gray-400 font-mono bg-gray-950/40 border border-gray-800/80 px-3 py-1 rounded-full">
               SECURE DIRECT CONVERSATION WITH {selectedUser.name.toUpperCase()}

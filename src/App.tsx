@@ -84,16 +84,31 @@ export default function App() {
 
   useEffect(() => {
     const visibleChannels = channels.filter(channel => canAccessChannel(channel, currentUser, activeOrganizationId));
-    const visibleDmUserIds = new Set(users.filter(user => user.id !== currentUser?.id && (!activeOrganizationId || user.organizationIds?.includes(activeOrganizationId))).map(user => user.id));
+    const visibleDmUsers = users.filter(user =>
+      (!activeOrganizationId || user.organizationIds?.includes(activeOrganizationId))
+    );
     const currentSelectionIsInvalid = currentView === 'channel'
       ? !visibleChannels.some(channel => channel.id === currentChannelId)
       : currentView === 'dms'
-        ? !visibleDmUserIds.has(currentChannelId)
+        ? !visibleDmUsers.some(user => user.id === currentChannelId)
         : false;
-    if (currentSelectionIsInvalid) {
-      setCurrentView('home');
-      setCurrentChannelId(visibleChannels[0]?.id || '');
+
+    if (!currentSelectionIsInvalid) return;
+
+    if (currentView === 'dms') {
+      // DMs use the same selection slot as channels. When opening the view
+      // without a recipient (for example from the mobile bottom nav), select
+      // the first teammate instead of treating the previous channel id as an
+      // invalid DM and navigating away from the view.
+      const fallbackDm = visibleDmUsers.find(user => user.id !== currentUser?.id) || visibleDmUsers[0];
+      if (fallbackDm) {
+        setCurrentChannelId(fallbackDm.id);
+      }
+      return;
     }
+
+    setCurrentView('home');
+    setCurrentChannelId(visibleChannels[0]?.id || '');
   }, [activeOrganizationId, channels, users, currentUser, currentView, currentChannelId]);
 
   useEffect(() => {
@@ -153,7 +168,14 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const navigateToView = (view: ViewType, channelId?: string) => {
-    if (channelId) setCurrentChannelId(channelId);
+    if (view === 'dms' && !channelId) {
+      const fallbackDm = users.find(user =>
+        user.id !== currentUser?.id && (!activeOrganizationId || user.organizationIds?.includes(activeOrganizationId))
+      ) || users.find(user => !activeOrganizationId || user.organizationIds?.includes(activeOrganizationId));
+      if (fallbackDm) setCurrentChannelId(fallbackDm.id);
+    } else if (channelId) {
+      setCurrentChannelId(channelId);
+    }
     setCurrentView(view);
     setIsMobileMenuOpen(false);
   };
