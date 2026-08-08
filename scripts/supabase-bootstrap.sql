@@ -213,6 +213,13 @@ create table if not exists private.agent_secrets (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.channel_agents (
+  channel_id text not null references public.channels(id) on delete cascade,
+  agent_id text not null references public.agents(id) on delete cascade,
+  joined_at timestamptz not null default now(),
+  primary key (channel_id, agent_id)
+);
+
 create table if not exists public.system_audit_logs (
   id text primary key,
   organization_id text not null references public.organizations(id) on delete cascade,
@@ -245,6 +252,7 @@ begin
   end if;
 end $$;
 create index if not exists channel_members_user_idx on public.channel_members(user_id);
+create index if not exists channel_agents_agent_idx on public.channel_agents(agent_id);
 create index if not exists conversation_members_user_idx on public.conversation_members(user_id);
 
 create or replace function private.is_organization_member(target_organization_id text)
@@ -386,6 +394,7 @@ alter table public.organizations enable row level security;
 alter table public.organization_members enable row level security;
 alter table public.channels enable row level security;
 alter table public.channel_members enable row level security;
+alter table public.channel_agents enable row level security;
 alter table public.conversations enable row level security;
 alter table public.conversation_members enable row level security;
 alter table public.messages enable row level security;
@@ -407,7 +416,7 @@ begin
   for policy_record in
     select schemaname, tablename, policyname from pg_policies
     where schemaname = 'public' and tablename in (
-      'profiles','organizations','organization_members','channels','channel_members','conversations',
+      'profiles','organizations','organization_members','channels','channel_members','channel_agents','conversations',
       'conversation_members','messages','message_reactions','message_reads','saved_items','tasks','contacts',
       'deals','canvases','file_assets','agents','system_audit_logs'
     )
@@ -449,6 +458,12 @@ create policy channels_admin_delete on public.channels for delete to authenticat
 
 create policy channel_members_select on public.channel_members for select to authenticated using (private.can_access_channel(channel_id));
 create policy channel_members_admin_write on public.channel_members for all to authenticated
+using (exists (select 1 from public.channels c where c.id = channel_id and private.is_organization_admin(c.organization_id)))
+with check (exists (select 1 from public.channels c where c.id = channel_id and private.is_organization_admin(c.organization_id)));
+
+create policy channel_agents_select on public.channel_agents for select to authenticated
+using (private.can_access_channel(channel_id));
+create policy channel_agents_admin_write on public.channel_agents for all to authenticated
 using (exists (select 1 from public.channels c where c.id = channel_id and private.is_organization_admin(c.organization_id)))
 with check (exists (select 1 from public.channels c where c.id = channel_id and private.is_organization_admin(c.organization_id)));
 

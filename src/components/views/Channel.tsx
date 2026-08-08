@@ -559,8 +559,12 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
   // Channel members list calculation
   const channelUsers = React.useMemo(() => {
     if (!channel) return [];
-    return users.filter(user => channel.memberIds
-      ? channel.memberIds.includes(user.id)
+    const memberIds = new Set([
+      ...(channel.memberIds || []),
+      ...(channel.agentIds || [])
+    ]);
+    return users.filter(user => channel.memberIds || channel.agentIds
+      ? memberIds.has(user.id)
       : Boolean(user.channelIds?.includes(channelId))
     );
   }, [users, channel, channelId]);
@@ -604,13 +608,18 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
 
   const addSelectedMembers = () => {
     if (!channel || !canManageChannelMembers || selectedMemberIds.length === 0) return;
+    const agentIdSet = new Set(agents.map(agent => agent.id));
     const currentMemberIds = channel.memberIds
       ? channel.memberIds
-      : users.filter(user => user.channelIds?.includes(channel.id)).map(user => user.id);
-    const nextMemberIds = Array.from(new Set([...currentMemberIds, ...selectedMemberIds]));
-    const updatedChannel = { ...channel, memberIds: nextMemberIds };
+      : users.filter(user => !user.isAgent && user.channelIds?.includes(channel.id)).map(user => user.id);
+    const currentAgentIds = channel.agentIds || [];
+    const selectedHumanIds = selectedMemberIds.filter(id => !agentIdSet.has(id));
+    const selectedAgentIds = selectedMemberIds.filter(id => agentIdSet.has(id));
+    const nextMemberIds = Array.from(new Set([...currentMemberIds, ...selectedHumanIds]));
+    const nextAgentIds = Array.from(new Set([...currentAgentIds, ...selectedAgentIds]));
+    const updatedChannel = { ...channel, memberIds: nextMemberIds, agentIds: nextAgentIds };
     const updatedChannels = channels.map(item => item.id === channel.id ? updatedChannel : item);
-    const updatedUsers = users.map(user => selectedMemberIds.includes(user.id)
+    const updatedUsers = users.map(user => selectedHumanIds.includes(user.id)
       ? { ...user, channelIds: Array.from(new Set([...(user.channelIds || []), channel.id])) }
       : user
     );
@@ -625,7 +634,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
   const mentionableUsers = React.useMemo(() => {
     const usersById = new Map(channelUsers.map(user => [user.id, user]));
     agents.forEach(agent => {
-      const isMember = channelUsers.some(user => user.id === agent.id);
+      const isMember = channel.agentIds?.includes(agent.id) || channelUsers.some(user => user.id === agent.id);
       if (isMember && !usersById.has(agent.id)) {
         usersById.set(agent.id, {
           id: agent.id,

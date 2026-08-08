@@ -35,6 +35,8 @@ export default async function handler(request: Request, response: Response) {
   const organizationId = typeof body.organizationId === 'string' ? body.organizationId.trim() : '';
   const channelId = typeof body.channelId === 'string' ? body.channelId.trim() : '';
   const requestedMemberIds = uniqueIds(body.memberIds);
+  const hasAgentIds = Array.isArray(body.agentIds);
+  const requestedAgentIds = uniqueIds(body.agentIds);
 
   if (!isValidId(organizationId)) return sendJson(response, 400, { error: 'A valid organization id is required.' });
   if (!isValidId(channelId)) return sendJson(response, 400, { error: 'A valid channel id is required.' });
@@ -90,6 +92,20 @@ export default async function handler(request: Request, response: Response) {
       return sendJson(response, 400, { error: 'One or more selected users do not belong to this organization.' });
     }
 
+    if (hasAgentIds) {
+      const agentsResponse = requestedAgentIds.length
+        ? await fetch(`${supabaseUrl}/rest/v1/agents?organization_id=eq.${encodeURIComponent(organizationId)}&id=in.(${requestedAgentIds.map(encodeURIComponent).join(',')})&select=id`, {
+          headers: adminHeaders
+        })
+        : null;
+      if (agentsResponse && !agentsResponse.ok) return sendJson(response, 400, { error: 'The channel agents could not be validated.' });
+      const organizationAgents = agentsResponse ? await agentsResponse.json() as Array<{ id?: string }> : [];
+      const organizationAgentIds = new Set(organizationAgents.map(agent => agent.id).filter((id): id is string => Boolean(id)));
+      if (requestedAgentIds.some(id => !organizationAgentIds.has(id))) {
+        return sendJson(response, 400, { error: 'One or more selected agents do not belong to this organization.' });
+      }
+    }
+
     const existingMembersResponse = await fetch(`${supabaseUrl}/rest/v1/channel_members?channel_id=eq.${encodeURIComponent(channelId)}&select=user_id`, {
       headers: adminHeaders
     });
@@ -127,7 +143,47 @@ export default async function handler(request: Request, response: Response) {
       throw new Error('The saved channel membership did not match the requested members.');
     }
 
-    return sendJson(response, 200, { success: true, memberIds: [...verifiedIds] });
+    let verifiedAgentIds: string[] = [];
+    if (hasAgentIds) {
+      const existingAgentsResponse = await fetch(`${supabaseUrl}/rest/v1/channel_agents?channel_id=eq.${encodeURIComponent(channelId)}&select=agent_id`, {
+        headers: adminHeaders
+      });
+      if (!existingAgentsResponse.ok) throw new Error('Unable to read the current channel agents.');
+      const existingAgents = await existingAgentsResponse.json() as Array<{ agent_id?: string }>;
+      const existingAgentIds = new Set(existingAgents.map(agent => agent.agent_id).filter((id): id is string => Boolean(id)));
+      const requestedAgentSet = new Set(requestedAgentIds);
+      const agentAdditions = requestedAgentIds.filter(id => !existingAgentIds.has(id));
+      const agentDeletions = [...existingAgentIds].filter(id => !requestedAgentSet.has(id));
+
+      if (agentAdditions.length) {
+        const insertAgentsResponse = await fetch(`${supabaseUrl}/rest/v1/channel_agents?on_conflict=channel_id,agent_id`, {
+          method: 'POST',
+          headers: { ...adminHeaders, Prefer: 'resolution=ignore-duplicates,return=minimal' },
+          body: JSON.stringify(agentAdditions.map(agentId => ({ channel_id: channelId, agent_id: agentId })))
+        });
+        if (!insertAgentsResponse.ok) throw new Error((await insertAgentsResponse.text()) || 'Unable to add channel agents.');
+      }
+
+      if (agentDeletions.length) {
+        const deleteAgentsResponse = await fetch(`${supabaseUrl}/rest/v1/channel_agents?channel_id=eq.${encodeURIComponent(channelId)}&agent_id=in.(${agentDeletions.map(encodeURIComponent).join(',')})`, {
+          method: 'DELETE',
+          headers: { ...adminHeaders, Prefer: 'return=minimal' }
+        });
+        if (!deleteAgentsResponse.ok) throw new Error((await deleteAgentsResponse.text()) || 'Unable to remove channel agents.');
+      }
+
+      const verifyAgentsResponse = await fetch(`${supabaseUrl}/rest/v1/channel_agents?channel_id=eq.${encodeURIComponent(channelId)}&select=agent_id`, {
+        headers: adminHeaders
+      });
+      if (!verifyAgentsResponse.ok) throw new Error('Unable to verify the saved channel agents.');
+      const verifiedAgents = await verifyAgentsResponse.json() as Array<{ agent_id?: string }>;
+      verifiedAgentIds = verifiedAgents.map(agent => agent.agent_id).filter((id): id is string => Boolean(id));
+      if (verifiedAgentIds.length !== requestedAgentSet.size || [...requestedAgentSet].some(id => !verifiedAgentIds.includes(id))) {
+        throw new Error('The saved channel agent membership did not match the requested agents.');
+      }
+    }
+
+    return sendJson(response, 200, { success: true, memberIds: [...verifiedIds], ...(hasAgentIds ? { agentIds: verifiedAgentIds } : {}) });
   } catch (error) {
     const message = error instanceof Error && error.message ? error.message : 'The server could not save channel membership.';
     return sendJson(response, 502, { error: message.slice(0, 500) });

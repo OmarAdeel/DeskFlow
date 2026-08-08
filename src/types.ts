@@ -49,6 +49,7 @@ export interface Channel {
   description?: string;
   unreadCount?: number;
   memberIds?: string[];
+  agentIds?: string[];
 }
 
 export interface TaskItem {

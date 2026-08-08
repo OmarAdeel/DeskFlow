@@ -10,8 +10,10 @@ export interface Channel {
   isPrivate: boolean;
   /** Organization/workspace that owns the channel. */
   organizationId?: string;
-  /** Explicit channel membership. Older channels may omit this and use user.channelIds as a fallback. */
+  /** Explicit human channel membership. Older channels may omit this and use user.channelIds as a fallback. */
   memberIds?: string[];
+  /** Explicit AI agent channel membership, stored separately because agents are not profiles. */
+  agentIds?: string[];
 }
 
 export function canAccessChannel(
@@ -34,7 +36,7 @@ export function canAccessChannel(
   if (user.role === 'Super Admin') return true;
   if (channel.organizationId && !user.organizationIds?.includes(channel.organizationId)) return false;
   if (!channel.isPrivate && channel.organizationId) return true;
-  if (channel.memberIds) return channel.memberIds.includes(user.id);
+  if (channel.memberIds || channel.agentIds) return Boolean(channel.memberIds?.includes(user.id) || channel.agentIds?.includes(user.id));
   return Boolean(user.channelIds?.includes(channel.id));
 }
 
@@ -290,7 +292,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
         agentId: agent.id,
         organizationIds: organizations.filter(organization => organization.memberIds.includes(agent.id)).map(organization => organization.id),
         channelIds: channels
-          .filter(channel => channel.memberIds ? channel.memberIds.includes(agent.id) : !channel.isPrivate)
+          .filter(channel => channel.agentIds ? channel.agentIds.includes(agent.id) : (channel.memberIds ? channel.memberIds.includes(agent.id) : !channel.isPrivate))
           .map(channel => channel.id)
       }));
       return [...regularUsers, ...agentUsers];
@@ -603,6 +605,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       supabase.from('organization_members').select('*'),
       supabase.from('channels').select('*').order('created_at'),
       supabase.from('channel_members').select('*'),
+      supabase.from('channel_agents').select('*'),
       supabase.from('messages').select('*').order('created_at'),
       supabase.from('message_reactions').select('*'),
       supabase.from('saved_items').select('message_id'),
@@ -611,7 +614,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     if (generation !== hydrationGenerationRef.current) return;
     const failed = results.find(result => result.error);
     if (failed?.error) throw failed.error;
-    const [profiles, organizationRows, membershipRows, channelRows, channelMembershipRows, messageRows, reactionRows, savedRows, agentRows] = results.map(result => result.data || []);
+    const [profiles, organizationRows, membershipRows, channelRows, channelMembershipRows, channelAgentRows, messageRows, reactionRows, savedRows, agentRows] = results.map(result => result.data || []);
 
     const nextUsers: WorkspaceUser[] = profiles.map((profile: any) => ({
       id: profile.id, name: profile.name, email: profile.email, username: profile.username || undefined,
@@ -631,7 +634,8 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     }));
     const nextChannels: Channel[] = channelRows.map((channel: any) => ({
       id: channel.id, name: channel.name, isPrivate: channel.is_private, organizationId: channel.organization_id,
-      memberIds: channelMembershipRows.filter((member: any) => member.channel_id === channel.id).map((member: any) => member.user_id)
+      memberIds: channelMembershipRows.filter((member: any) => member.channel_id === channel.id).map((member: any) => member.user_id),
+      agentIds: channelAgentRows.filter((member: any) => member.channel_id === channel.id).map((member: any) => member.agent_id)
     }));
     const replies = new Map<string, Reply[]>();
     for (const row of messageRows.filter((message: any) => message.parent_message_id) as any[]) {
@@ -800,7 +804,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     });
   };
 
-  const persistChannelMembership = async (organizationId: string, channelId: string, memberIds: string[]) => {
+  const persistChannelMembership = async (organizationId: string, channelId: string, memberIds: string[], agentIds: string[] = []) => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) {
       console.error('Unable to save channel members: the DeskFlow session is unavailable.');
@@ -810,7 +814,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       const response = await fetch('/api/channel-members', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ organizationId, channelId, memberIds })
+        body: JSON.stringify({ organizationId, channelId, memberIds, agentIds })
       });
       if (!response.ok) {
         const detail = await response.json().catch(() => null) as { error?: string } | null;
@@ -840,11 +844,13 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
         if (error) console.error('Unable to save channel metadata.', error);
       }
 
-      const agentIds = new Set(agents.map(agent => agent.id));
-      const desiredMemberIds = Array.from(new Set((channel.memberIds || []).filter(id => !agentIds.has(id))));
-      const previousMemberIds = Array.from(new Set((previousChannel?.memberIds || []).filter(id => !agentIds.has(id))));
-      if (JSON.stringify(desiredMemberIds) !== JSON.stringify(previousMemberIds)) {
-        void persistChannelMembership(organizationId, channel.id, desiredMemberIds);
+      const desiredMemberIds = Array.from(new Set(channel.memberIds || []));
+      const previousMemberIds = Array.from(new Set(previousChannel?.memberIds || []));
+      const desiredAgentIds = Array.from(new Set(channel.agentIds || []));
+      const previousAgentIds = Array.from(new Set(previousChannel?.agentIds || []));
+      if (JSON.stringify(desiredMemberIds) !== JSON.stringify(previousMemberIds)
+        || JSON.stringify(desiredAgentIds) !== JSON.stringify(previousAgentIds)) {
+        void persistChannelMembership(organizationId, channel.id, desiredMemberIds, desiredAgentIds);
       }
     }
     if (removed.length) {
@@ -1308,7 +1314,8 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
           name: 'general',
           isPrivate: false,
           organizationId: organization.id,
-          memberIds: organization.memberIds
+          memberIds: organization.memberIds.filter(memberId => users.some(user => user.id === memberId && !user.isAgent)),
+          agentIds: organization.memberIds.filter(memberId => agents.some(agent => agent.id === memberId))
         }));
 
       if (defaultChannels.length === 0 && migratedChannels.every((channel, index) => channel === previousChannels[index])) {

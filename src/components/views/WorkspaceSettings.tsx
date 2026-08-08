@@ -225,15 +225,19 @@ export function WorkspaceSettingsView() {
   };
 
   const getChannelMemberIds = (channel: Channel, sourceUsers: WorkspaceUser[] = localUsers) => (
-    channel.memberIds ?? sourceUsers.filter(user => user.channelIds?.includes(channel.id)).map(user => user.id)
+    channel.memberIds ?? sourceUsers.filter(user => !user.isAgent && user.channelIds?.includes(channel.id)).map(user => user.id)
+  );
+
+  const getChannelAgentIds = (channel: Channel, sourceUsers: WorkspaceUser[] = localUsers) => (
+    channel.agentIds ?? sourceUsers.filter(user => user.isAgent && user.channelIds?.includes(channel.id)).map(user => user.id)
   );
 
   const synchronizeUserChannelIds = (nextChannels: Channel[], sourceUsers: WorkspaceUser[]) => {
     return sourceUsers.map(user => ({
       ...user,
       channelIds: nextChannels
-        .filter(channel => channel.memberIds
-          ? channel.memberIds.includes(user.id)
+        .filter(channel => channel.memberIds || channel.agentIds
+          ? Boolean(channel.memberIds?.includes(user.id) || channel.agentIds?.includes(user.id))
           : user.channelIds?.includes(channel.id))
         .map(channel => channel.id)
     }));
@@ -260,7 +264,8 @@ export function WorkspaceSettingsView() {
       name: trimmedName.toLowerCase().replace(/\s+/g, '-'),
       isPrivate: newChannelIsPrivate,
       organizationId: activeOrganizationId || undefined,
-      memberIds: Array.from(new Set(newChannelMemberIds.filter(id => organizationChannelUsers.some(user => user.id === id))))
+      memberIds: Array.from(new Set(newChannelMemberIds.filter(id => organizationChannelUsers.some(user => user.id === id && !user.isAgent)))),
+      agentIds: Array.from(new Set(newChannelMemberIds.filter(id => organizationChannelUsers.some(user => user.id === id && user.isAgent))))
     };
     const updatedChannels = [...localChannels, newChannel];
     const updatedUsers = synchronizeUserChannelIds(updatedChannels, localUsers);
@@ -496,7 +501,7 @@ export function WorkspaceSettingsView() {
     setEditingChannelId(channel.id);
     setEditChannelName(channel.name);
     setEditChannelIsPrivate(channel.isPrivate);
-    setEditChannelMemberIds(getChannelMemberIds(channel));
+    setEditChannelMemberIds([...getChannelMemberIds(channel), ...getChannelAgentIds(channel)]);
   };
 
   const saveEditChannel = () => {
@@ -507,7 +512,8 @@ export function WorkspaceSettingsView() {
               ...channel,
               name: editChannelName.trim().toLowerCase().replace(/\s+/g, '-'),
               isPrivate: editChannelIsPrivate,
-              memberIds: Array.from(new Set(editChannelMemberIds.filter(id => organizationChannelUsers.some(user => user.id === id))))
+              memberIds: Array.from(new Set(editChannelMemberIds.filter(id => organizationChannelUsers.some(user => user.id === id && !user.isAgent)))),
+              agentIds: Array.from(new Set(editChannelMemberIds.filter(id => organizationChannelUsers.some(user => user.id === id && user.isAgent))))
             }
           : channel
       );
