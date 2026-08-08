@@ -124,6 +124,8 @@ export default async function handler(request: Request, response: Response) {
       return sendJson(response, 502, { error: { message: 'The configured provider endpoint redirected. Use its final HTTPS API base URL instead.' } });
     }
     const body = await providerResponse.text();
+    const retryAfter = providerResponse.headers.get('retry-after');
+    if (retryAfter) response.setHeader('Retry-After', retryAfter);
     response.status(providerResponse.status).setHeader('Content-Type', providerResponse.headers.get('content-type') || 'application/json').send(body);
   } catch (error) {
     if (providerController.signal.aborted) {

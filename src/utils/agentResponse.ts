@@ -227,6 +227,32 @@ const getApiRoot = (baseUrl: string): string => baseUrl.replace(/\/(?:chat\/comp
 
 const PROXY_TIMEOUT_MS = 30_000;
 
+const readProviderError = async (response: Response): Promise<string> => {
+  try {
+    const errorData = await response.clone().json() as { error?: { message?: string }; message?: string };
+    return String(errorData.error?.message || errorData.message || '').trim();
+  } catch {
+    return '';
+  }
+};
+
+const isUnsupportedWebSearchError = (status: number, detail: string): boolean => {
+  if (![400, 404, 422].includes(status)) return false;
+  return /web[_ -]?search|unknown (?:field|parameter)|unsupported (?:field|parameter|option)|unrecognized (?:field|parameter)/i.test(detail);
+};
+
+const formatProviderFailure = (agent: WorkspaceAgent, model: string, response: Response, detail: string): string => {
+  if (response.status === 429) {
+    const retryAfter = response.headers.get('retry-after');
+    const retryText = retryAfter ? ` Retry after ${retryAfter}.` : ' Please wait briefly before trying again.';
+    const quotaText = /quota|billing|credits?|balance|insufficient/i.test(detail)
+      ? ' The configured provider account has no available quota or billing credit.'
+      : ' The configured AI provider rate-limited this request.';
+    return `⚠️ ${agent.name} could not respond.${quotaText}${retryText}${detail ? ` Provider message: ${detail}` : ''}`;
+  }
+  return `⚠️ ${agent.name} could not complete the request through ${model} (${response.status}).${detail ? ` ${detail}` : ''}`;
+};
+
 const requestProvider = async (
   endpoint: string,
   apiKey: string,
@@ -332,7 +358,9 @@ export const requestAgentReply = async (
         if (content) return removeAgentNamePrefix(content, agent);
         return `${fallback}\n\n⚠️ The web-search provider returned no answer for this request.`;
       }
-      return `⚠️ I could not access live web search for this request. The ${model} Responses API request failed, so I will not present an unsourced answer as live research. Check the provider response, API key, and model capability.`;
+      const providerDetail = await readProviderError(responsesResponse);
+      if (responsesResponse.status === 429) return formatProviderFailure(agent, model, responsesResponse, providerDetail);
+      return `⚠️ I could not access live web search for this request. The ${model} Responses API request failed (${responsesResponse.status})${providerDetail ? `: ${providerDetail}` : ''}, so I will not present an unsourced answer as live research. Check the provider response, API key, and model capability.`;
     }
 
     const requestBody: Record<string, unknown> = {
@@ -351,22 +379,15 @@ export const requestAgentReply = async (
     let response = await request();
 
     // Some OpenAI-compatible providers do not recognize web_search_options.
-    // Retry as a normal completion so the agent remains usable there.
-    if (!response.ok && requestedWebSearch && !webSearchUnavailable) {
+    // Retry only when the provider explicitly reports an unsupported parameter;
+    // retrying 429/5xx responses immediately amplifies rate-limit failures.
+    let providerDetail = response.ok ? '' : await readProviderError(response);
+    if (!response.ok && requestedWebSearch && !webSearchUnavailable && isUnsupportedWebSearchError(response.status, providerDetail)) {
       delete requestBody.web_search_options;
       response = await request();
+      providerDetail = response.ok ? '' : await readProviderError(response);
     }
-    if (!response.ok) {
-      let providerDetail = '';
-      try {
-        const errorData = await response.json() as { error?: { message?: string }; message?: string };
-        providerDetail = errorData.error?.message || errorData.message || '';
-      } catch {
-        // Some providers return an empty or non-JSON error body.
-      }
-      const detail = providerDetail ? ` ${providerDetail}` : '';
-      return `⚠️ ${agent.name} could not complete the request through ${model} (${response.status}).${detail}`;
-    }
+    if (!response.ok) return formatProviderFailure(agent, model, response, providerDetail);
     const data = await response.json() as ChatCompletionResponse;
     const content = removeAgentNamePrefix(extractContent(data), agent);
     if (!content) return `⚠️ ${agent.name} returned an empty response. Please try again or check the agent's provider settings.`;
