@@ -182,6 +182,7 @@ interface WorkspaceContextProps {
   isAuthInitialized: boolean;
   isPasswordRecovery: boolean;
   login: (email: string, password: string) => Promise<string | null>;
+  loginWithGoogle: () => Promise<string | null>;
   logout: () => void;
   changeCurrentUserPassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
   adminSetUserPassword: (userId: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
@@ -576,6 +577,26 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
 
   const hydrateWorkspace = async (authUser: User, generation = ++hydrationGenerationRef.current) => {
     setIsSupabaseHydrated(false);
+    // OAuth sign-ins (for example Google) do not automatically create a
+    // workspace profile. Ask the server to provision one (idempotently) so
+    // RLS lets the new account read the workspace before hydration runs.
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token && authUser.app_metadata?.provider === 'google') {
+        await fetch('/api/auth-google-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+          body: JSON.stringify({
+            userId: authUser.id,
+            email: authUser.email,
+            name: authUser.user_metadata?.name || authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || 'DeskFlow User',
+            avatarUrl: authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture
+          })
+        });
+      }
+    } catch (error) {
+      console.error('Unable to provision the Google sign-in profile.', error);
+    }
     const results = await Promise.all([
       supabase.from('profiles').select('*'),
       supabase.from('organizations').select('*').order('created_at'),
@@ -899,6 +920,17 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
     if (error) return error.message;
     setIsPasswordRecovery(false);
+    return null;
+  };
+
+  const loginWithGoogle = async (): Promise<string | null> => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: `${window.location.origin}/` }
+    });
+    if (error) return error.message;
+    // The OAuth flow navigates the browser to Google and back; no further
+    // state is needed here.
     return null;
   };
 
@@ -1299,7 +1331,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       dmUnreadByUserId, markDmRead,
       currentUser,
       presenceByUserId,
-      isAuthenticated, isAuthInitialized, isPasswordRecovery, login, logout,
+      isAuthenticated, isAuthInitialized, isPasswordRecovery, login, loginWithGoogle, logout,
       changeCurrentUserPassword,
       adminSetUserPassword,
       adminCreateUser,
