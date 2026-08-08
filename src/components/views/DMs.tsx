@@ -1210,7 +1210,18 @@ export function DMsView({ userId }: { userId?: string }) {
         };
       });
     };
-    const replacePlaceholder = (text: string) => updatePlaceholder(text);
+    const replacePlaceholder = (text: string) => {
+      if (!isCurrentRequest()) return;
+      // Swap the placeholder for a persistable id so the final answer can be
+      // stored (the placeholder prefix is never persisted, by design).
+      const finalMessageId = `agent_msg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      setConversations(previous => ({
+        ...previous,
+        [agent.id]: (previous[agent.id] || []).map(message => parentMessageId === message.id
+          ? { ...message, replies: (message.replies || []).map(reply => reply.id === placeholderId ? { ...reply, id: finalMessageId, text } : reply) }
+          : message.id === placeholderId ? { ...message, id: finalMessageId, text } : message)
+      }));
+    };
 
     insertPlaceholder();
     setAgentStatus('searching');
@@ -1249,7 +1260,8 @@ export function DMsView({ userId }: { userId?: string }) {
             }).catch(error => {
               if (error instanceof DOMException && error.name === 'AbortError') return;
               if (!isCurrentRequest()) return;
-              replacePlaceholder('⚠️ I could not complete that request. Please try again.');
+              updatePlaceholder('⚠️ I could not complete that request. Please try again.');
+              // The error fallback keeps the placeholder id and is never persisted.
               setAgentStatus(null);
               agentRequestControllerRef.current = null;
             });

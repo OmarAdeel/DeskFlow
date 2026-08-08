@@ -1045,13 +1045,18 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
         : [...previous, { id: placeholderId, channelId, senderId: agent.id, text: placeholderText, timestamp: Date.now(), isRead: true, replies: [], reactions: [] }]
       );
     };
+    const finalMessageId = `agent_msg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const replacePlaceholder = (text: string) => {
       if (!isCurrentRequest()) return;
+      // Swap the placeholder for a persistable id so the final answer is
+      // saved to Supabase (transient “searching/thinking…” states are never
+      // persisted — the placeholder prefix is rejected by the client and the
+      // server route on purpose).
       setMessages(previous => parentMessageId
         ? previous.map(message => message.id === parentMessageId
-          ? { ...message, replies: (message.replies || []).map(reply => reply.id === placeholderId ? { ...reply, text } : reply) }
+          ? { ...message, replies: (message.replies || []).map(reply => reply.id === placeholderId ? { ...reply, id: finalMessageId, text } : reply) }
           : message)
-        : previous.map(message => message.id === placeholderId ? { ...message, text } : message)
+        : previous.map(message => message.id === placeholderId ? { ...message, id: finalMessageId, text } : message)
       );
     };
 
@@ -1092,7 +1097,10 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
             }).catch(error => {
               if (error instanceof DOMException && error.name === 'AbortError') return;
               if (!isCurrentRequest()) return;
-              replacePlaceholder('⚠️ I could not complete that request. Please try again.');
+              updatePlaceholder('⚠️ I could not complete that request. Please try again.');
+              // The error fallback is intentionally NOT persisted: `updatePlaceholder`
+              // keeps the placeholder id, and both the client guard and the server
+              // route reject `agent_placeholder_` ids.
               setAgentStatus(null);
               agentRequestControllerRef.current = null;
             });

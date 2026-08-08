@@ -873,22 +873,33 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     ]);
     const before = new Map(flatten(previous).map(row => [row.id, row]));
     const nextRows = flatten(next);
+    const agentIds = new Set(agents.map(agent => agent.id));
     const changed = nextRows.filter(row => {
-      if (row.senderId !== userId) return false;
       const previousRow = before.get(row.id);
-      return !previousRow
-        || previousRow.text !== row.text
-        || previousRow.channelId !== row.channelId
-        || previousRow.parentId !== row.parentId
-        || previousRow.timestamp !== row.timestamp;
+      if (previousRow) {
+        const changedByOwner = row.senderId === userId
+          && (previousRow.text !== row.text || previousRow.channelId !== row.channelId || previousRow.parentId !== row.parentId || previousRow.timestamp !== row.timestamp);
+        const agentTextChanged = agentIds.has(row.senderId) && previousRow.text !== row.text;
+        return changedByOwner || agentTextChanged;
+      }
+      return row.senderId === userId || agentIds.has(row.senderId);
     });
     const canModerateMessages = currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin';
     const removed = flatten(previous)
       .filter(row => (row.senderId === userId || canModerateMessages) && !nextRows.some(candidate => candidate.id === row.id))
       .map(row => row.id);
-    if (changed.length) {
+    // Agent messages cannot be upserted through the normal client path: the
+    // `sender_id` column references `profiles(id)` and RLS requires the
+    // sender to be the signed-in user. Send them through the server route,
+    // which validates the session/agent and writes with the service role.
+    const agentRows = changed.filter(row => agents.some(agent => agent.id === row.senderId) && !row.id.startsWith('agent_placeholder_'));
+    if (agentRows.length) {
+      void persistAgentMessages(agentRows, organizationByChannel(channels));
+    }
+    const userChanged = changed.filter(row => !agents.some(agent => agent.id === row.senderId));
+    if (userChanged.length) {
       const organizationByChannel = new Map(channels.map(channel => [channel.id, channel.organizationId]));
-      const { error } = await supabase.from('messages').upsert(changed.map(row => ({
+      const { error } = await supabase.from('messages').upsert(userChanged.map(row => ({
         id: row.id, organization_id: organizationByChannel.get(row.channelId), channel_id: row.channelId,
         sender_id: row.senderId, parent_message_id: row.parentId, content: row.text,
         created_at: new Date(row.timestamp).toISOString(), updated_at: new Date().toISOString()
@@ -903,8 +914,9 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     const beforeRows = flatten(previous);
     for (const row of nextRows) {
       const previousReactions = beforeRows.find(item => item.id === row.id)?.reactions || [];
-      const added = row.reactions.filter(emoji => !previousReactions.includes(emoji));
-      const deleted = previousReactions.filter(emoji => !row.reactions.includes(emoji));
+      const nextReactions = row.reactions || [];
+      const added = nextReactions.filter(reaction => !previousReactions.includes(reaction));
+      const deleted = previousReactions.filter(reaction => !nextReactions.includes(reaction));
       if (added.length) {
         const { error } = await supabase.from('message_reactions').upsert(added.map(emoji => ({ message_id: row.id, user_id: userId, emoji })), { onConflict: 'message_id,user_id,emoji' });
         if (error) console.error('Unable to save reactions.', error);
@@ -912,6 +924,38 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       if (deleted.length) {
         const { error } = await supabase.from('message_reactions').delete().eq('message_id', row.id).eq('user_id', userId).in('emoji', deleted);
         if (error) console.error('Unable to remove reactions.', error);
+      }
+    }
+  };
+
+  const organizationByChannel = (channelList: Channel[]) => new Map(channelList.map(channel => [channel.id, channel.organizationId]));
+
+  const persistAgentMessages = async (rows: Array<{ id: string; channelId: string; senderId: string; text: string; timestamp: number; parentId: string | null }>, organizationByChannelMap: Map<string, string | undefined>) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return;
+    const organizationId = organizationByChannelMap.get(rows[0]?.channelId || '') || activeOrganizationId || '';
+    if (!organizationId) return;
+    for (const row of rows) {
+      try {
+        const response = await fetch('/api/agent-message', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+          body: JSON.stringify({
+            messageId: row.id,
+            organizationId,
+            channelId: row.channelId,
+            senderId: row.senderId,
+            parentMessageId: row.parentId,
+            content: row.text,
+            createdAt: new Date(row.timestamp).toISOString()
+          })
+        });
+        if (!response.ok) {
+          const detail = await response.json().catch(() => null) as { error?: string } | null;
+          console.error('Unable to save agent message.', detail?.error || response.status);
+        }
+      } catch (error) {
+        console.error('Unable to save agent message.', error);
       }
     }
   };
