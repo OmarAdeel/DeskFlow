@@ -15,6 +15,7 @@ import { DisplayName } from '../DisplayName';
 import { EmojiDeluxe } from '../EmojiDeluxe';
 import { UserAvatar, getAvatarUrl } from '../UserAvatar';
 import { AgentConversationMessage, buildAgentWorkspaceContext, buildWorkspaceLink, containsAgentMention, requestAgentReply } from '../../utils/agentResponse';
+import { createMessageId } from '../../utils/messageId';
 
 // Beautiful inline sub-component to play recorded voice notes
 function VoiceNotePlayer({ durationText }: { durationText: string }) {
@@ -1153,7 +1154,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
     const outgoingText = newMessage.trim();
 
     const message = {
-      id: `msg_${Date.now()}`,
+      id: createMessageId('msg'),
       channelId,
       senderId: currentUser.id,
       text: newMessage,
@@ -1174,7 +1175,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
     const voiceText = `🎤 Voice Note (${formatTime(audioRecordingTime)})  \n*Listen to the voice memo from ${currentUser.name}.*`;
     
     const message = {
-      id: `msg_voice_${Date.now()}`,
+      id: createMessageId('msg_voice'),
       channelId,
       senderId: currentUser.id,
       text: voiceText,
@@ -1194,7 +1195,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
     const videoText = `📹 Camera Video Clip (${formatTime(videoRecordingTime)})  \n*Recorded media attachment from ${currentUser.name}.*`;
     
     const message = {
-      id: `msg_video_${Date.now()}`,
+      id: createMessageId('msg_video'),
       channelId,
       senderId: currentUser.id,
       text: videoText,
@@ -1213,7 +1214,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
     if (!threadReply.trim() || !currentUser || !activeThreadId) return;
 
     const reply = {
-      id: `reply_${Date.now()}`,
+      id: createMessageId('reply'),
       senderId: currentUser.id,
       text: threadReply,
       timestamp: Date.now(),

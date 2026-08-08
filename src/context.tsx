@@ -332,6 +332,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
 
   const syncedMessagesRef = useRef<Message[]>([]);
   const deletedMessageIdsRef = useRef<Set<string>>(new Set());
+  const messagePersistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const syncedSavedItemsRef = useRef<string[]>([]);
 
   const [userLanguage, setUserLanguage] = useState<string>(() => {
@@ -932,10 +933,16 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     });
   };
 
+  const enqueueMessagePersistence = (previous: Message[], next: Message[], userId: string) => {
+    messagePersistenceQueueRef.current = messagePersistenceQueueRef.current
+      .catch(() => undefined)
+      .then(() => persistMessageChanges(previous, next, userId));
+  };
+
   const setMessages: React.Dispatch<React.SetStateAction<Message[]>> = update => {
     setMessagesState(previous => {
       const next = typeof update === 'function' ? update(previous) : update;
-      if (isSupabaseHydrated && authenticatedUserId) void persistMessageChanges(previous, next, authenticatedUserId);
+      if (isSupabaseHydrated && authenticatedUserId) enqueueMessagePersistence(previous, next, authenticatedUserId);
       syncedMessagesRef.current = next;
       return next;
     });
@@ -988,15 +995,57 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     if (agentRows.length) {
       void persistAgentMessages(agentRows, organizationByChannel(channels));
     }
-    const userChanged = changed.filter(row => !agents.some(agent => agent.id === row.senderId));
+    const userChanged = Array.from(new Map(
+      changed
+        .filter(row => !agents.some(agent => agent.id === row.senderId))
+        .map(row => [row.id, row])
+    ).values());
     if (userChanged.length) {
       const organizationByChannel = new Map(channels.map(channel => [channel.id, channel.organizationId]));
-      const { error } = await supabase.from('messages').upsert(userChanged.map(row => ({
-        id: row.id, organization_id: organizationByChannel.get(row.channelId), channel_id: row.channelId,
-        sender_id: row.senderId, parent_message_id: row.parentId, content: row.text,
-        created_at: new Date(row.timestamp).toISOString(), updated_at: new Date().toISOString()
-      })));
-      if (error) console.error('Unable to save messages.', error);
+      const validRows = userChanged.flatMap(row => {
+        const organizationId = organizationByChannel.get(row.channelId);
+        const timestamp = new Date(row.timestamp);
+        if (row.senderId !== userId || !organizationId || !row.channelId || !row.id || !row.text.trim() || Number.isNaN(timestamp.getTime())) {
+          console.error('Unable to save invalid message row.', {
+            id: row.id,
+            organizationId,
+            channelId: row.channelId,
+            senderId: row.senderId,
+            parentMessageId: row.parentId
+          });
+          return [];
+        }
+        return [{
+          id: row.id,
+          organization_id: organizationId,
+          channel_id: row.channelId,
+          conversation_id: null,
+          sender_id: row.senderId,
+          parent_message_id: row.parentId,
+          content: row.text,
+          created_at: timestamp.toISOString(),
+          updated_at: new Date().toISOString()
+        }];
+      });
+
+      // Persist rows independently. A malformed reply or a temporary constraint
+      // conflict must not roll back unrelated messages in the same UI update.
+      for (const row of validRows) {
+        if (deletedMessageIdsRef.current.has(row.id)) continue;
+        const { error } = await supabase.from('messages').upsert(row, { onConflict: 'id' });
+        if (error) {
+          console.error('Unable to save message.', {
+            error,
+            row: {
+              id: row.id,
+              organizationId: row.organization_id,
+              channelId: row.channel_id,
+              senderId: row.sender_id,
+              parentMessageId: row.parent_message_id
+            }
+          });
+        }
+      }
     }
     const beforeRows = flatten(previous);
     for (const row of nextRows) {
@@ -1235,6 +1284,53 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       void supabase.removeChannel(presenceChannel);
     };
   }, [authenticatedUserId, isAuthenticated, userStatus, users]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !authenticatedUserId || !currentUser || !activeOrganizationId) return;
+
+    const realtimeChannel = supabase.channel(`deskflow-channel-messages-${authenticatedUserId}-${activeOrganizationId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `organization_id=eq.${activeOrganizationId}` }, payload => {
+        const row = payload.new as {
+          id?: string;
+          organization_id?: string;
+          channel_id?: string | null;
+          sender_id?: string;
+          parent_message_id?: string | null;
+          content?: string;
+          created_at?: string;
+        };
+        if (!row.id || !row.channel_id || !row.sender_id || !row.created_at || row.sender_id === authenticatedUserId) return;
+        const targetChannel = channels.find(channel => channel.id === row.channel_id);
+        if (!targetChannel || !canAccessChannel(targetChannel, currentUser, activeOrganizationId)) return;
+
+        const incomingTimestamp = new Date(row.created_at).getTime();
+        setMessagesState(previous => {
+          if (previous.some(message => message.id === row.id || message.replies.some(reply => reply.id === row.id))) return previous;
+          if (row.parent_message_id) {
+            const next = previous.map(message => message.id === row.parent_message_id
+              ? { ...message, replies: [...message.replies, { id: row.id as string, senderId: row.sender_id as string, text: String(row.content || ''), timestamp: incomingTimestamp, isRead: false, reactions: [] }] }
+              : message);
+            syncedMessagesRef.current = next;
+            return next;
+          }
+          const next = [...previous, {
+            id: row.id as string,
+            channelId: row.channel_id as string,
+            senderId: row.sender_id as string,
+            text: String(row.content || ''),
+            timestamp: incomingTimestamp,
+            isRead: false,
+            replies: [],
+            reactions: []
+          }].sort((left, right) => left.timestamp - right.timestamp);
+          syncedMessagesRef.current = next;
+          return next;
+        });
+      })
+      .subscribe();
+
+    return () => { void supabase.removeChannel(realtimeChannel); };
+  }, [activeOrganizationId, authenticatedUserId, channels, currentUser, isAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated || !authenticatedUserId || !currentUser || !activeOrganizationId || agentMessagesTableAvailable === false) return;

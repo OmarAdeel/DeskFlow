@@ -6,6 +6,7 @@ import { MessageReactions } from '../MessageReactions';
 import { FormattedMessage } from '../FormattedMessage';
 import { EmojiDeluxe } from '../EmojiDeluxe';
 import { UserAvatar } from '../UserAvatar';
+import { createMessageId } from '../../utils/messageId';
 
 const ThreadItem: React.FC<{ msg: Message, onNavigate: any, onSelectThread: (id: string) => void }> = ({ msg, onNavigate, onSelectThread }) => {
   const { users, channels, setMessages, messages, currentUser, drafts, setDrafts } = useWorkspace();
@@ -76,7 +77,7 @@ const ThreadItem: React.FC<{ msg: Message, onNavigate: any, onSelectThread: (id:
     if (!threadReply.trim() || !currentUser) return;
 
     const reply = {
-      id: `reply_${Date.now()}`,
+      id: createMessageId('reply'),
       senderId: currentUser.id,
       text: threadReply,
       timestamp: Date.now(),
@@ -357,7 +358,7 @@ export function ThreadsView({ onNavigate }: { onNavigate: any }) {
     if (!threadReply.trim() || !currentUser || !activeThreadId) return;
 
     const reply = {
-      id: `reply_${Date.now()}`,
+      id: createMessageId('reply'),
       senderId: currentUser.id,
       text: threadReply,
       timestamp: Date.now(),

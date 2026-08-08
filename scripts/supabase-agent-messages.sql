@@ -16,6 +16,13 @@ create table if not exists public.agent_messages (
   updated_at timestamptz not null default now()
 );
 
+-- Human replies use public.messages and may target an agent-authored root.
+-- The original self-reference rejects those valid replies with SQLSTATE 23503.
+alter table public.messages
+  drop constraint if exists messages_parent_message_id_fkey;
+create index if not exists messages_parent_idx
+  on public.messages(parent_message_id);
+
 create index if not exists agent_messages_channel_created_idx
   on public.agent_messages(channel_id, created_at);
 create index if not exists agent_messages_parent_idx

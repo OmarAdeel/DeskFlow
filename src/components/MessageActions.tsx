@@ -3,6 +3,7 @@ import { Check, SmilePlus, MessageSquare, Forward, Bookmark, MoreVertical, Link 
 import { useWorkspace } from '../context';
 import { EmojiDeluxe } from './EmojiDeluxe';
 import { UserAvatar } from './UserAvatar';
+import { createMessageId } from '../utils/messageId';
 
 interface MessageActionsProps {
   itemId: string;
@@ -176,7 +177,7 @@ export function MessageActions({ itemId, onReply }: MessageActionsProps) {
 
     const { text } = getChannelIdAndMessageText();
     const forwardMsg = {
-      id: `msg_f_${Date.now()}`,
+      id: createMessageId('msg_f'),
       channelId: targetChanId,
       senderId: currentUser?.id || '8',
       text: `*Forwarded message:*\n${text}`,

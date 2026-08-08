@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { canAccessChannel, useWorkspace, Channel, WorkspaceUser } from '../context';
 import { ViewType } from '../types';
+import { createMessageId } from '../utils/messageId';
 
 interface NewMessageModalProps {
   isOpen: boolean;
@@ -115,7 +116,7 @@ export function NewMessageModal({ isOpen, onClose, onNavigate }: NewMessageModal
       const channel = selectedTarget.data as Channel;
       if (messageText.trim()) {
         const newMessage = {
-          id: 'msg_' + Date.now(),
+          id: createMessageId('msg'),
           channelId: channel.id,
           senderId: currentUser?.id || '8',
           text: messageText.trim(),

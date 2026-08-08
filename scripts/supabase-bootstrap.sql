@@ -93,7 +93,9 @@ create table if not exists public.messages (
   channel_id text references public.channels(id) on delete cascade,
   conversation_id text references public.conversations(id) on delete cascade,
   sender_id uuid not null references public.profiles(id) on delete cascade,
-  parent_message_id text references public.messages(id) on delete cascade,
+  -- A thread can be rooted at either a human message or an agent message, so
+  -- this cannot reference only public.messages(id).
+  parent_message_id text,
   content text not null,
   attachments jsonb not null default '[]'::jsonb,
   is_pinned boolean not null default false,
@@ -102,6 +104,9 @@ create table if not exists public.messages (
   check ((channel_id is not null)::int + (conversation_id is not null)::int = 1)
 );
 
+
+create index if not exists messages_parent_idx
+  on public.messages(parent_message_id);
 
 create table if not exists public.message_reactions (
   message_id text not null references public.messages(id) on delete cascade,
@@ -248,6 +253,11 @@ create index if not exists channels_organization_idx on public.channels(organiza
 create index if not exists messages_channel_created_idx on public.messages(channel_id, created_at);
 create index if not exists messages_conversation_created_idx on public.messages(conversation_id, created_at);
 create index if not exists messages_parent_idx on public.messages(parent_message_id);
+-- Existing installations may still have the original self-referencing foreign
+-- key. Remove it so human replies can target agent-authored thread roots.
+alter table public.messages
+  drop constraint if exists messages_parent_message_id_fkey;
+
 create index if not exists agent_messages_channel_created_idx on public.agent_messages(channel_id, created_at);
 create index if not exists agent_messages_parent_idx on public.agent_messages(parent_message_id);
 create index if not exists organization_members_user_idx on public.organization_members(user_id);
