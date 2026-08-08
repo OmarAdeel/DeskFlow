@@ -235,6 +235,11 @@ const defaultUsers: WorkspaceUser[] = [
   { id: '1', name: 'John Doe', email: 'john.doe@democompany.com', role: 'Member', title: 'Developer', phone: '+1234567890', channelIds: ['4'], username: 'john.doe' }
 ];
 
+// Older production databases may not have the optional agent-membership table yet.
+// Avoid retrying the same 404 during auth/workspace rehydration; the migration
+// remains required before agent channel membership can be persisted.
+let channelAgentsTableAvailable: boolean | null = null;
+
 function passwordMeetsRequirements(password: string): boolean {
   return password.length >= 8;
 }
@@ -599,13 +604,24 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     } catch (error) {
       console.error('Unable to provision the Google sign-in profile.', error);
     }
+    const loadChannelAgents = async () => {
+      if (channelAgentsTableAvailable === false) return { data: [], error: null };
+      const result = await supabase.from('channel_agents').select('*');
+      if (result.error?.code === 'PGRST205') {
+        channelAgentsTableAvailable = false;
+        console.warn('The optional channel_agents table is not installed. Apply scripts/supabase-channel-agents.sql to enable persistent AI agent channel membership.');
+        return { data: [], error: null };
+      }
+      if (!result.error) channelAgentsTableAvailable = true;
+      return result;
+    };
     const results = await Promise.all([
       supabase.from('profiles').select('*'),
       supabase.from('organizations').select('*').order('created_at'),
       supabase.from('organization_members').select('*'),
       supabase.from('channels').select('*').order('created_at'),
       supabase.from('channel_members').select('*'),
-      supabase.from('channel_agents').select('*'),
+      loadChannelAgents(),
       supabase.from('messages').select('*').order('created_at'),
       supabase.from('message_reactions').select('*'),
       supabase.from('saved_items').select('message_id'),
