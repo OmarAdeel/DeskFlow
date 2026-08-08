@@ -800,8 +800,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     });
   };
 
-  const persistChannelMembership = async (organizationId: string, channelId: string, additions: string[], deletions: string[]) => {
-    if (additions.length === 0 && deletions.length === 0) return;
+  const persistChannelMembership = async (organizationId: string, channelId: string, memberIds: string[]) => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) {
       console.error('Unable to save channel members: the DeskFlow session is unavailable.');
@@ -811,7 +810,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       const response = await fetch('/api/channel-members', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-        body: JSON.stringify({ organizationId, channelId, additions, deletions })
+        body: JSON.stringify({ organizationId, channelId, memberIds })
       });
       if (!response.ok) {
         const detail = await response.json().catch(() => null) as { error?: string } | null;
@@ -841,11 +840,12 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
         if (error) console.error('Unable to save channel metadata.', error);
       }
 
-      const validMemberIds = (channel.memberIds || []).filter(id => users.some(user => user.id === id && !user.isAgent));
-      const existing = (previousChannel?.memberIds || []).filter(id => users.some(user => user.id === id && !user.isAgent));
-      const additions = validMemberIds.filter(id => !existing.includes(id));
-      const deletions = existing.filter(id => !validMemberIds.includes(id));
-      void persistChannelMembership(organizationId, channel.id, additions, deletions);
+      const agentIds = new Set(agents.map(agent => agent.id));
+      const desiredMemberIds = Array.from(new Set((channel.memberIds || []).filter(id => !agentIds.has(id))));
+      const previousMemberIds = Array.from(new Set((previousChannel?.memberIds || []).filter(id => !agentIds.has(id))));
+      if (JSON.stringify(desiredMemberIds) !== JSON.stringify(previousMemberIds)) {
+        void persistChannelMembership(organizationId, channel.id, desiredMemberIds);
+      }
     }
     if (removed.length) {
       const { error } = await supabase.from('channels').delete().in('id', removed.map(channel => channel.id));

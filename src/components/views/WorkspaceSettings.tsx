@@ -192,9 +192,10 @@ export function WorkspaceSettingsView() {
     JSON.stringify(localUsers) !== JSON.stringify(users);
 
   const handleSaveChanges = () => {
+    // Channel/user edits are persisted immediately by their individual actions.
+    // Do not submit the cached settings snapshots here: another view may have
+    // changed channel membership since this settings panel was opened.
     setWorkspaceName(localName.trim());
-    setChannels(localChannels);
-    setUsers(localUsers);
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 2000);
   };
