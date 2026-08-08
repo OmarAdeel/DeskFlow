@@ -800,6 +800,28 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     });
   };
 
+  const persistChannelMembership = async (organizationId: string, channelId: string, additions: string[], deletions: string[]) => {
+    if (additions.length === 0 && deletions.length === 0) return;
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      console.error('Unable to save channel members: the DeskFlow session is unavailable.');
+      return;
+    }
+    try {
+      const response = await fetch('/api/channel-members', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ organizationId, channelId, additions, deletions })
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null) as { error?: string } | null;
+        console.error('Unable to save channel members.', detail?.error || response.status);
+      }
+    } catch (error) {
+      console.error('Unable to save channel members.', error);
+    }
+  };
+
   const reconcileChannels = async (previous: Channel[], next: Channel[], userId: string) => {
     const nextIds = new Set(next.map(channel => channel.id));
     const removed = previous.filter(channel => !nextIds.has(channel.id));
@@ -807,25 +829,23 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       const previousChannel = previous.find(item => item.id === channel.id);
       const organizationId = channel.organizationId || activeOrganizationId;
       if (!organizationId) continue;
-      if (!previousChannel || JSON.stringify(previousChannel) !== JSON.stringify(channel)) {
+      const channelMetadataChanged = !previousChannel
+        || previousChannel.name !== channel.name
+        || previousChannel.isPrivate !== channel.isPrivate
+        || previousChannel.organizationId !== channel.organizationId;
+      if (channelMetadataChanged) {
         const { error } = await supabase.from('channels').upsert({
           id: channel.id, organization_id: organizationId, name: channel.name,
           is_private: channel.isPrivate, created_by: previousChannel ? undefined : userId
         });
-        if (error) { console.error('Unable to save channel.', error); continue; }
-        const validMemberIds = (channel.memberIds || []).filter(id => users.some(user => user.id === id && !user.isAgent));
-        const existing = (previousChannel?.memberIds || []).filter(id => users.some(user => user.id === id && !user.isAgent));
-        const additions = validMemberIds.filter(id => !existing.includes(id));
-        const deletions = existing.filter(id => !validMemberIds.includes(id));
-        if (additions.length) {
-          const { error: memberError } = await supabase.from('channel_members').upsert(additions.map(memberId => ({ channel_id: channel.id, user_id: memberId })), { onConflict: 'channel_id,user_id' });
-          if (memberError) console.error('Unable to add channel members.', memberError);
-        }
-        if (deletions.length) {
-          const { error: memberError } = await supabase.from('channel_members').delete().eq('channel_id', channel.id).in('user_id', deletions);
-          if (memberError) console.error('Unable to remove channel members.', memberError);
-        }
+        if (error) console.error('Unable to save channel metadata.', error);
       }
+
+      const validMemberIds = (channel.memberIds || []).filter(id => users.some(user => user.id === id && !user.isAgent));
+      const existing = (previousChannel?.memberIds || []).filter(id => users.some(user => user.id === id && !user.isAgent));
+      const additions = validMemberIds.filter(id => !existing.includes(id));
+      const deletions = existing.filter(id => !validMemberIds.includes(id));
+      void persistChannelMembership(organizationId, channel.id, additions, deletions);
     }
     if (removed.length) {
       const { error } = await supabase.from('channels').delete().in('id', removed.map(channel => channel.id));
