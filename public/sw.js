@@ -1,4 +1,4 @@
-const CACHE_NAME = 'deskflow-shell-v2';
+const CACHE_NAME = 'deskflow-shell-v3';
 const APP_SHELL = ['/', '/deskflow.webmanifest', '/favicon.png', '/deskflow-icon-192.png', '/deskflow-icon-512.png'];
 
 self.addEventListener('install', event => {
@@ -25,9 +25,24 @@ self.addEventListener('fetch', event => {
     return;
   }
 
+  // Hashed application assets must be checked against the network first so a
+  // Vercel deployment cannot leave users on an older DM bundle indefinitely.
+  if (['script', 'style'].includes(request.destination)) {
+    event.respondWith(
+      fetch(request).then(response => {
+        if (response.ok) {
+          const copy = response.clone();
+          void caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
+        }
+        return response;
+      }).catch(() => caches.match(request))
+    );
+    return;
+  }
+
   event.respondWith(
     caches.match(request).then(cached => cached || fetch(request).then(response => {
-      if (response.ok && ['script', 'style', 'image', 'font'].includes(request.destination)) {
+      if (response.ok && ['image', 'font'].includes(request.destination)) {
         const copy = response.clone();
         void caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
       }
