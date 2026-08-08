@@ -12,7 +12,7 @@ interface MessageActionsProps {
 const WHATSAPP_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🎉', '🔥', '👏', '🚀'];
 
 export function MessageActions({ itemId, onReply }: MessageActionsProps) {
-  const { savedItems, setSavedItems, messages, setMessages, users, channels, setChannels, currentUser } = useWorkspace();
+  const { savedItems, setSavedItems, messages, setMessages, deleteMessages, users, channels, setChannels, currentUser } = useWorkspace();
   const isSaved = savedItems.includes(itemId);
   const [showToast, setShowToast] = useState('');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -78,15 +78,10 @@ export function MessageActions({ itemId, onReply }: MessageActionsProps) {
     setTimeout(() => setShowToast(''), 2500);
   };
 
-  const deleteItem = () => {
+  const deleteItem = async () => {
     if (!canDelete || !parentMessage || !window.confirm('Delete this message permanently?')) return;
-    setMessages(previous => parentMessage.id === itemId
-      ? previous.filter(message => message.id !== itemId)
-      : previous.map(message => message.id === parentMessage.id
-        ? { ...message, replies: message.replies.filter(reply => reply.id !== itemId) }
-        : message)
-    );
     const deletedIds = parentMessage.id === itemId ? [itemId, ...parentMessage.replies.map(reply => reply.id)] : [itemId];
+    await deleteMessages(deletedIds);
     setSavedItems(previous => previous.filter(savedId => !deletedIds.includes(savedId)));
     setShowMoreMenu(false);
   };
@@ -132,7 +127,7 @@ export function MessageActions({ itemId, onReply }: MessageActionsProps) {
   };
 
   const selectEmoji = (emoji: string) => {
-    setMessages(messages.map(msg => {
+    setMessages(previous => previous.map(msg => {
       if (msg.id === itemId) {
         const current = msg.reactions || [];
         // Only one emoji per time: deactivate if same emoji is clicked, or replace with single select
@@ -190,14 +185,14 @@ export function MessageActions({ itemId, onReply }: MessageActionsProps) {
       replies: []
     };
 
-    setMessages([...messages, forwardMsg]);
+    setMessages(previous => [...previous, forwardMsg]);
     setForwardedUserIds(prev => [...prev, user.id]);
     setShowToast(`Message forwarded to ${user.name} successfully!`);
     setTimeout(() => setShowToast(''), 3000);
   };
 
   const markComplete = () => {
-    setMessages(messages.map(msg => {
+    setMessages(previous => previous.map(msg => {
       if (msg.id === itemId) {
         const current = msg.reactions || [];
         const updated = current.includes('✅') ? [] : ['✅'];

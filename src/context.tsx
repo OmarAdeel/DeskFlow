@@ -172,6 +172,7 @@ interface WorkspaceContextProps {
   setAgents: React.Dispatch<React.SetStateAction<WorkspaceAgent[]>>;
   messages: Message[];
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
+  deleteMessages: (messageIds: string[]) => Promise<void>;
   drafts: Draft[];
   setDrafts: (drafts: Draft[]) => void;
   savedItems: string[];
@@ -330,6 +331,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
   const dmNotifiedMessageIdsRef = useRef<Set<string>>(new Set());
 
   const syncedMessagesRef = useRef<Message[]>([]);
+  const deletedMessageIdsRef = useRef<Set<string>>(new Set());
   const syncedSavedItemsRef = useRef<string[]>([]);
 
   const [userLanguage, setUserLanguage] = useState<string>(() => {
@@ -939,13 +941,30 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     });
   };
 
+  const deleteMessages = async (messageIds: string[]) => {
+    const ids = Array.from(new Set(messageIds.filter(Boolean)));
+    if (!ids.length) return;
+    ids.forEach(id => deletedMessageIdsRef.current.add(id));
+    setMessagesState(previous => {
+      const idSet = new Set(ids);
+      const next = previous
+        .filter(message => !idSet.has(message.id))
+        .map(message => ({ ...message, replies: message.replies.filter(reply => !idSet.has(reply.id)) }));
+      syncedMessagesRef.current = next;
+      return next;
+    });
+    if (!isSupabaseHydrated || !authenticatedUserId) return;
+    const { error } = await supabase.from('messages').delete().in('id', ids);
+    if (error) console.error('Unable to delete messages.', error);
+  };
+
   const persistMessageChanges = async (previous: Message[], next: Message[], userId: string) => {
     const flatten = (items: Message[]) => items.flatMap(message => [
       { id: message.id, channelId: message.channelId, senderId: message.senderId, text: message.text, timestamp: message.timestamp, parentId: null as string | null, reactions: message.reactions || [] },
       ...message.replies.map(reply => ({ id: reply.id, channelId: message.channelId, senderId: reply.senderId, text: reply.text, timestamp: reply.timestamp, parentId: message.id, reactions: reply.reactions || [] }))
     ]);
     const before = new Map(flatten(previous).map(row => [row.id, row]));
-    const nextRows = flatten(next);
+    const nextRows = flatten(next).filter(row => !deletedMessageIdsRef.current.has(row.id));
     const agentIds = new Set(agents.map(agent => agent.id));
     const changed = nextRows.filter(row => {
       const previousRow = before.get(row.id);
@@ -957,10 +976,10 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       }
       return row.senderId === userId || agentIds.has(row.senderId);
     });
-    const canModerateMessages = currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin';
-    const removed = flatten(previous)
-      .filter(row => (row.senderId === userId || canModerateMessages) && !nextRows.some(candidate => candidate.id === row.id))
-      .map(row => row.id);
+    // Never infer deletions from array differences. Several screens can issue
+    // updates from a stale render snapshot; treating absent rows as deleted can
+    // remove unrelated human messages from Supabase. Explicit deletion uses
+    // deleteMessages() instead.
     // Agent messages cannot be upserted through the normal client path: the
     // `sender_id` column references `profiles(id)` and RLS requires the
     // sender to be the signed-in user. Send them through the server route,
@@ -979,11 +998,6 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       })));
       if (error) console.error('Unable to save messages.', error);
     }
-    if (removed.length) {
-      const { error } = await supabase.from('messages').delete().in('id', removed);
-      if (error) console.error('Unable to delete messages.', error);
-    }
-
     const beforeRows = flatten(previous);
     for (const row of nextRows) {
       const previousReactions = beforeRows.find(item => item.id === row.id)?.reactions || [];
@@ -1242,15 +1256,23 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
 
         const incomingTimestamp = new Date(row.created_at).getTime();
         setMessagesState(previous => {
-          if (previous.some(message => message.id === row.id || message.replies.some(reply => reply.id === row.id))) return previous;
+          if (previous.some(message => message.id === row.id || message.replies.some(reply => reply.id === row.id))) {
+            syncedMessagesRef.current = previous;
+            return previous;
+          }
           if (row.parent_message_id) {
             const parentExists = previous.some(message => message.id === row.parent_message_id || message.replies.some(reply => reply.id === row.parent_message_id));
-            if (!parentExists) return previous;
-            return previous.map(message => message.id === row.parent_message_id
+            if (!parentExists) {
+              syncedMessagesRef.current = previous;
+              return previous;
+            }
+            const next = previous.map(message => message.id === row.parent_message_id
               ? { ...message, replies: [...message.replies, { id: row.id as string, senderId: row.agent_id as string, text: String(row.content || ''), timestamp: incomingTimestamp, isRead: true, reactions: [] }] }
               : message);
+            syncedMessagesRef.current = next;
+            return next;
           }
-          return [...previous, {
+          const next = [...previous, {
             id: row.id as string,
             channelId: row.channel_id as string,
             senderId: row.agent_id as string,
@@ -1260,6 +1282,8 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
             replies: [],
             reactions: []
           }].sort((left, right) => left.timestamp - right.timestamp);
+          syncedMessagesRef.current = next;
+          return next;
         });
       })
       .subscribe(status => {
@@ -1492,7 +1516,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       activeOrganizationId, setActiveOrganizationId,
       activeOrganization, accessibleOrganizations,
       agents, setAgents,
-      messages, setMessages,
+      messages, setMessages, deleteMessages,
       drafts, setDrafts,
       savedItems, setSavedItems,
       dmUnreadByUserId, markDmRead,

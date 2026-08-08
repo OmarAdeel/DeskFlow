@@ -83,8 +83,8 @@ const ThreadItem: React.FC<{ msg: Message, onNavigate: any, onSelectThread: (id:
       isRead: true
     };
 
-    setMessages(messages.map(m => 
-      m.id === msg.id 
+    setMessages(previous => previous.map(m =>
+      m.id === msg.id
         ? { ...m, replies: [...m.replies, reply] }
         : m
     ));
@@ -364,8 +364,8 @@ export function ThreadsView({ onNavigate }: { onNavigate: any }) {
       isRead: true
     };
 
-    setMessages(messages.map(m => 
-      m.id === activeThreadId 
+    setMessages(previous => previous.map(m =>
+      m.id === activeThreadId
         ? { ...m, replies: [...m.replies, reply] }
         : m
     ));

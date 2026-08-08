@@ -2,13 +2,13 @@ import React from 'react';
 import { useWorkspace } from '../context';
 
 export function MessageReactions({ reactions, itemId }: { reactions?: string[], itemId: string }) {
-  const { messages, setMessages } = useWorkspace();
+  const { setMessages } = useWorkspace();
 
   if (!reactions || reactions.length === 0) return null;
 
   const handleToggle = (emoji: string) => {
     // If clicked, we deactivate it (remove it)
-    setMessages(messages.map(msg => {
+    setMessages(previous => previous.map(msg => {
       if (msg.id === itemId) {
         const current = msg.reactions || [];
         const updated = current.includes(emoji) ? [] : [emoji];

@@ -76,9 +76,7 @@ export function UnreadsView({ onNavigate }: { onNavigate?: any }) {
 
   // Mark all channel messages as read
   const markChannelMessageRead = (messageId: string) => {
-    setMessages(
-      messages.map(m => (m.id === messageId ? { ...m, isRead: true } : m))
-    );
+    setMessages(previous => previous.map(m => (m.id === messageId ? { ...m, isRead: true } : m)));
   };
 
   // Clear specific DM unread count
@@ -88,7 +86,7 @@ export function UnreadsView({ onNavigate }: { onNavigate?: any }) {
 
   // Clear all unreads at once for instant satisfaction
   const markAllAsRead = () => {
-    setMessages(messages.map(m => ({ ...m, isRead: true })));
+    setMessages(previous => previous.map(m => ({ ...m, isRead: true })));
     setUnreadDMs([]);
   };
 

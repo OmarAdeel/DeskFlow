@@ -13,7 +13,7 @@ interface NewMessageModalProps {
 }
 
 export function NewMessageModal({ isOpen, onClose, onNavigate }: NewMessageModalProps) {
-  const { channels, users, currentUser, messages, setMessages, activeOrganizationId } = useWorkspace();
+  const { channels, users, currentUser, setMessages, activeOrganizationId } = useWorkspace();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTarget, setSelectedTarget] = useState<{ type: 'channel' | 'user'; data: Channel | WorkspaceUser } | null>(null);
   const [messageText, setMessageText] = useState('');
@@ -123,7 +123,7 @@ export function NewMessageModal({ isOpen, onClose, onNavigate }: NewMessageModal
           isRead: true,
           replies: []
         };
-        setMessages([...messages, newMessage]);
+        setMessages(previous => [...previous, newMessage]);
       }
       onNavigate('channel', channel.id);
     } else {

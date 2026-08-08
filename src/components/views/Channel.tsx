@@ -1162,7 +1162,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
       replies: []
     };
 
-    setMessages([...messages, message]);
+    setMessages(previous => [...previous, message]);
     const mentionedAgent = !channel?.isPrivate && agents.find(agent => agent.enabled && containsAgentMention(outgoingText, agent.username));
     if (mentionedAgent) respondToPublicMention(outgoingText, mentionedAgent);
     setNewMessage('');
@@ -1183,7 +1183,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
       replies: []
     };
 
-    setMessages([...messages, message]);
+    setMessages(previous => [...previous, message]);
     setIsRecordingAudio(false);
     setAudioRecordingTime(0);
     setIsAudioPaused(false);
@@ -1203,7 +1203,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
       replies: []
     };
 
-    setMessages([...messages, message]);
+    setMessages(previous => [...previous, message]);
     setIsRecordingVideo(false);
     setVideoRecordingTime(0);
   };
@@ -1220,8 +1220,8 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
       isRead: true
     };
 
-    setMessages(messages.map(m => 
-      m.id === activeThreadId 
+    setMessages(previous => previous.map(m =>
+      m.id === activeThreadId
         ? { ...m, replies: [...m.replies, reply] }
         : m
     ));
@@ -2502,7 +2502,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
                                   reactions: ['🤖']
                                 };
 
-                                setMessages([...messages, botMessage]);
+                                setMessages(previous => [...previous, botMessage]);
                                 alert(`Workflow "${wf.name}" triggered! A bot broadcast has been published inside output logs.`);
                                 setActiveTab('messages');
                               }}
