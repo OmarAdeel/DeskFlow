@@ -258,6 +258,8 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
   const [authenticatedUserId, setAuthenticatedUserId] = useState<string | null>(null);
   const [isSupabaseHydrated, setIsSupabaseHydrated] = useState(false);
   const hydrationGenerationRef = useRef(0);
+  const hydratedUserIdRef = useRef<string | null>(null);
+  const hydratingUserIdRef = useRef<string | null>(null);
 
   const [workspaceName, setWorkspaceName] = useState(() => {
     return localStorage.getItem('workspace_name') || 'Demo Company';
@@ -711,6 +713,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
 
     if (generation !== hydrationGenerationRef.current) return;
     setAuthenticatedUserId(authUser.id);
+    hydratedUserIdRef.current = authUser.id;
     setUsers(nextUsers);
     setOrganizationsState(nextOrganizations);
     setChannelsState(nextChannels);
@@ -730,27 +733,47 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     let active = true;
     const applyUser = async (user: User | null) => {
       if (!active) return;
-      const generation = ++hydrationGenerationRef.current;
       if (!user) {
+        ++hydrationGenerationRef.current;
+        hydratedUserIdRef.current = null;
+        hydratingUserIdRef.current = null;
         setAuthenticatedUserId(null); setIsAuthenticated(false); setIsSupabaseHydrated(false); setDrafts([]);
         setIsAuthInitialized(true);
         return;
       }
+      // Supabase can emit INITIAL_SESSION/SIGNED_IN again on tab focus and
+      // TOKEN_REFRESHED in the background. Rehydrating the whole workspace for
+      // the same account replaces optimistic messages and in-flight AI thread
+      // placeholders with an older database snapshot.
+      if (hydratedUserIdRef.current === user.id || hydratingUserIdRef.current === user.id) {
+        setIsAuthInitialized(true);
+        return;
+      }
+      const generation = ++hydrationGenerationRef.current;
+      hydratingUserIdRef.current = user.id;
       try { await hydrateWorkspace(user, generation); }
       catch (error) {
         console.error('Unable to load the Supabase workspace.', error);
         if (active && generation === hydrationGenerationRef.current) {
+          hydratedUserIdRef.current = null;
           setAuthenticatedUserId(null); setIsAuthenticated(false); setIsSupabaseHydrated(false);
         }
       } finally {
+        if (hydratingUserIdRef.current === user.id) hydratingUserIdRef.current = null;
         if (active && generation === hydrationGenerationRef.current) setIsAuthInitialized(true);
       }
     };
     void supabase.auth.getSession().then(({ data }) => applyUser(data.session?.user || null));
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'PASSWORD_RECOVERY') setIsPasswordRecovery(true);
-      if (event === 'SIGNED_OUT') setIsPasswordRecovery(false);
-      void applyUser(session?.user || null);
+      if (event === 'SIGNED_OUT') {
+        setIsPasswordRecovery(false);
+        void applyUser(null);
+        return;
+      }
+      if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN' || event === 'PASSWORD_RECOVERY') {
+        void applyUser(session?.user || null);
+      }
     });
     return () => { active = false; ++hydrationGenerationRef.current; data.subscription.unsubscribe(); };
   }, []);
