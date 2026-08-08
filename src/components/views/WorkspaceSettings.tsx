@@ -152,10 +152,30 @@ export function WorkspaceSettingsView() {
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelIsPrivate, setNewChannelIsPrivate] = useState(false);
   const [newChannelMemberIds, setNewChannelMemberIds] = useState<string[]>(currentUser ? [currentUser.id] : []);
-  const organizationChannelUsers = localUsers.filter(user => {
-    if (!activeOrganizationId) return true;
-    return user.organizationIds?.includes(activeOrganizationId) || user.role === 'Super Admin';
-  });
+  // Agents live in `agents`, not `profiles`; merge them into this picker directly
+  // so channel membership edits always use the canonical agent IDs.
+  const organizationChannelUsers = React.useMemo(() => {
+    const profileUsers = localUsers.filter(user => !user.isAgent).filter(user => {
+      if (!activeOrganizationId) return true;
+      return user.organizationIds?.includes(activeOrganizationId) || user.role === 'Super Admin';
+    });
+    const profileIds = new Set(profileUsers.map(user => user.id));
+    const agentUsers: WorkspaceUser[] = agents
+      .filter(agent => !profileIds.has(agent.id))
+      .filter(agent => !activeOrganizationId || organizations.some(organization => organization.id === activeOrganizationId && organization.memberIds.includes(agent.id)))
+      .map(agent => ({
+        id: agent.id,
+        name: agent.name,
+        email: agent.email,
+        role: 'AI Agent',
+        title: 'AI Assistant',
+        username: agent.username,
+        isAgent: true,
+        agentId: agent.id,
+        organizationIds: organizations.filter(organization => organization.memberIds.includes(agent.id)).map(organization => organization.id)
+      }));
+    return [...profileUsers, ...agentUsers];
+  }, [localUsers, agents, organizations, activeOrganizationId]);
   const scopedChannels = localChannels.filter(channel => !activeOrganizationId || channel.organizationId === activeOrganizationId);
 
   // States for adding user
@@ -259,13 +279,14 @@ export function WorkspaceSettingsView() {
     const trimmedName = newChannelName.trim();
     if (!trimmedName) return;
 
+    const selectedUsers = new Set(newChannelMemberIds);
     const newChannel: Channel = {
       id: `channel_${Date.now()}`,
       name: trimmedName.toLowerCase().replace(/\s+/g, '-'),
       isPrivate: newChannelIsPrivate,
       organizationId: activeOrganizationId || undefined,
-      memberIds: Array.from(new Set(newChannelMemberIds.filter(id => organizationChannelUsers.some(user => user.id === id && !user.isAgent)))),
-      agentIds: Array.from(new Set(newChannelMemberIds.filter(id => organizationChannelUsers.some(user => user.id === id && user.isAgent))))
+      memberIds: Array.from(new Set(organizationChannelUsers.filter(user => selectedUsers.has(user.id) && !user.isAgent).map(user => user.id))),
+      agentIds: Array.from(new Set(organizationChannelUsers.filter(user => selectedUsers.has(user.id) && user.isAgent).map(user => user.id)))
     };
     const updatedChannels = [...localChannels, newChannel];
     const updatedUsers = synchronizeUserChannelIds(updatedChannels, localUsers);
@@ -512,8 +533,8 @@ export function WorkspaceSettingsView() {
               ...channel,
               name: editChannelName.trim().toLowerCase().replace(/\s+/g, '-'),
               isPrivate: editChannelIsPrivate,
-              memberIds: Array.from(new Set(editChannelMemberIds.filter(id => organizationChannelUsers.some(user => user.id === id && !user.isAgent)))),
-              agentIds: Array.from(new Set(editChannelMemberIds.filter(id => organizationChannelUsers.some(user => user.id === id && user.isAgent))))
+              memberIds: Array.from(new Set(organizationChannelUsers.filter(user => editChannelMemberIds.includes(user.id) && !user.isAgent).map(user => user.id))),
+              agentIds: Array.from(new Set(organizationChannelUsers.filter(user => editChannelMemberIds.includes(user.id) && user.isAgent).map(user => user.id)))
             }
           : channel
       );

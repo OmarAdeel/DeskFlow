@@ -556,6 +556,28 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
     }, 0);
   };
 
+  // Build the directory directly from the canonical agent list as well as profiles.
+  // Agent rows are not profiles, so relying only on the derived `users` state can
+  // leave the picker empty during the hydration/render between those two updates.
+  const directoryUsers = React.useMemo(() => {
+    const profileUsers = users.filter(user => !user.isAgent);
+    const knownUserIds = new Set(profileUsers.map(user => user.id));
+    const agentUsers = agents
+      .filter(agent => !knownUserIds.has(agent.id))
+      .map(agent => ({
+        id: agent.id,
+        name: agent.name,
+        email: agent.email,
+        role: 'AI Agent',
+        title: 'AI Assistant',
+        username: agent.username,
+        isAgent: true,
+        agentId: agent.id,
+        organizationIds: organizations.filter(organization => organization.memberIds.includes(agent.id)).map(organization => organization.id)
+      }));
+    return [...profileUsers, ...agentUsers];
+  }, [users, agents, organizations]);
+
   // Channel members list calculation
   const channelUsers = React.useMemo(() => {
     if (!channel) return [];
@@ -563,18 +585,18 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
       ...(channel.memberIds || []),
       ...(channel.agentIds || [])
     ]);
-    return users.filter(user => channel.memberIds || channel.agentIds
+    return directoryUsers.filter(user => channel.memberIds || channel.agentIds
       ? memberIds.has(user.id)
       : Boolean(user.channelIds?.includes(channelId))
     );
-  }, [users, channel, channelId]);
+  }, [directoryUsers, channel, channelId]);
 
   const canManageChannelMembers = Boolean(currentUser && (currentUser.role === 'Super Admin' || currentUser.role === 'Admin' || channelUsers.some(user => user.id === currentUser.id)));
   const addableChannelUsers = React.useMemo(() => {
     if (!channel) return [];
     const memberIds = new Set(channelUsers.map(user => user.id));
     const search = memberSearchQuery.trim().toLowerCase();
-    return users.filter(user => {
+    return directoryUsers.filter(user => {
       if (memberIds.has(user.id)) return false;
       if (activeOrganizationId && !user.organizationIds?.includes(activeOrganizationId) && user.role !== 'Super Admin') return false;
       if (channel.organizationId && user.role !== 'Super Admin' && !user.organizationIds?.includes(channel.organizationId)) return false;
@@ -583,7 +605,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
         || user.email.toLowerCase().includes(search)
         || user.username?.toLowerCase().includes(search);
     });
-  }, [users, channel, channelUsers, activeOrganizationId, memberSearchQuery]);
+  }, [directoryUsers, channel, channelUsers, activeOrganizationId, memberSearchQuery]);
 
   const openAddMembers = () => {
     if (!canManageChannelMembers) return;
