@@ -1071,11 +1071,20 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     if (!isAuthenticated || !authenticatedUserId || !currentUser) return;
     const channel = supabase.channel(`deskflow-message-notifications-${authenticatedUserId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
-        const row = payload.new as { id?: string; channel_id?: string; sender_id?: string; content?: string; parent_message_id?: string | null };
-        if (document.visibilityState === 'visible' || !row.id || !row.channel_id || row.sender_id === authenticatedUserId) return;
+        const row = payload.new as { id?: string; organization_id?: string; channel_id?: string | null; conversation_id?: string | null; sender_id?: string; content?: string; parent_message_id?: string | null };
+        if (document.visibilityState === 'visible' || !row.id || !row.sender_id || row.sender_id === authenticatedUserId) return;
+        const sender = users.find(user => user.id === row.sender_id);
+        if (row.conversation_id && row.organization_id === activeOrganizationId) {
+          void showDeskFlowNotification(`${sender?.name || 'A teammate'} sent you a direct message`, {
+            body: String(row.content || 'Sent a new direct message').slice(0, 180),
+            tag: `deskflow-dm-${row.id}`,
+            data: { url: `${window.location.pathname}?view=dms&userId=${encodeURIComponent(row.sender_id)}` }
+          });
+          return;
+        }
+        if (!row.channel_id) return;
         const targetChannel = channels.find(candidate => candidate.id === row.channel_id);
         if (!targetChannel || !canAccessChannel(targetChannel, currentUser, targetChannel.organizationId || null)) return;
-        const sender = users.find(user => user.id === row.sender_id);
         const params = new URLSearchParams({ view: 'channel', channelId: row.channel_id, messageId: row.parent_message_id || row.id });
         if (row.parent_message_id) params.set('replyId', row.id);
         void showDeskFlowNotification(`${sender?.name || 'A teammate'} in #${targetChannel.name}`, {
@@ -1086,7 +1095,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       })
       .subscribe();
     return () => { void supabase.removeChannel(channel); };
-  }, [authenticatedUserId, channels, currentUser, isAuthenticated, users]);
+  }, [activeOrganizationId, authenticatedUserId, channels, currentUser, isAuthenticated, users]);
 
   const accessibleOrganizations = currentUser?.role === 'Super Admin'
     ? organizations

@@ -114,7 +114,7 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const view = params.get('view') as ViewType;
-    const channelId = params.get('channelId');
+    const channelId = params.get('channelId') || params.get('userId');
     const messageId = params.get('messageId');
     const replyId = params.get('replyId');
     if (view) {
