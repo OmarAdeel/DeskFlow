@@ -1053,9 +1053,25 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
 
       // Persist rows independently. A malformed reply or a temporary constraint
       // conflict must not roll back unrelated messages in the same UI update.
+      const isMissingParentError = (error: { code?: string; message?: string } | null): boolean => {
+        if (!error) return false;
+        // 23503 = foreign_key_violation (parent_message_id -> messages.id). This
+        // happens for a human reply whose thread root is an AI agent message,
+        // which lives in public.agent_messages, not public.messages.
+        return error.code === '23503' || /foreign key|parent_message_id/i.test(error.message || '');
+      };
+
       for (const row of validRows) {
         if (deletedMessageIdsRef.current.has(row.id)) continue;
-        const { error } = await supabase.from('messages').upsert(row, { onConflict: 'id' });
+        let { error } = await supabase.from('messages').upsert(row, { onConflict: 'id' });
+        if (error && row.parent_message_id && isMissingParentError(error)) {
+          // The mixed-thread migration (drop messages_parent_message_id_fkey) has
+          // not been applied yet. Persist the reply as a top-level message so it
+          // survives a refresh instead of disappearing; threading is restored
+          // automatically once the migration runs.
+          const fallback = await supabase.from('messages').upsert({ ...row, parent_message_id: null }, { onConflict: 'id' });
+          error = fallback.error;
+        }
         if (error) {
           console.error('Unable to save message.', {
             error,
