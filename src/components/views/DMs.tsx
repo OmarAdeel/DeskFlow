@@ -443,9 +443,26 @@ export function DMsView({ userId }: { userId?: string }) {
   const callTimerRef = useRef<number | null>(null);
 
   const handleStartCall = (mode: 'audio' | 'video') => {
-    if (!selectedUser?.id) return;
-    startGlobalHuddle(selectedUser.id, 'person');
-    if (mode === 'video') window.setTimeout(() => toggleHuddleVideo(), 0);
+    if (!selectedUser?.id || !currentUser?.id) return;
+    const part = () => Math.random().toString(36).slice(2, 5);
+    const roomCode = `${part()}-${part()}-${part()}`;
+
+    // Start locally and send a private invite to the selected DM recipient.
+    // The recipient is already listening globally because HuddlesView remains mounted.
+    startGlobalHuddle(selectedUser.id, 'person', roomCode, mode === 'video');
+    const inviteChannel = supabase.channel(`deskflow-call-invite-${selectedUser.id}`, {
+      config: { broadcast: { self: false } }
+    });
+    inviteChannel.on('broadcast', { event: 'invite' }, () => undefined).subscribe(status => {
+      if (status !== 'SUBSCRIBED') return;
+      const payload = { from: currentUser.id, roomCode, video: mode === 'video' };
+      [0, 800, 2000].forEach(delay => {
+        window.setTimeout(() => {
+          void inviteChannel.send({ type: 'broadcast', event: 'invite', payload });
+        }, delay);
+      });
+      window.setTimeout(() => { void supabase.removeChannel(inviteChannel); }, 5000);
+    });
     window.dispatchEvent(new CustomEvent('workspace-navigate', { detail: { view: 'huddles' } }));
   };
 

@@ -78,6 +78,7 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
   const [error, setError] = useState<string | null>(null);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const peersRef = useRef<Record<string, RTCPeerConnection>>({});
+  const pendingIceRef = useRef<Record<string, RTCIceCandidateInit[]>>({});
   const localStreamRef = useRef<MediaStream | null>(null);
   const roomIdRef = useRef(roomId);
   const userIdRef = useRef(userId);
@@ -118,8 +119,17 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
       setParticipants(previous => previous.some(item => item.id === peerId) ? previous : [...previous, { id: peerId, joinedAt: Date.now(), mode: modeRef.current }]);
     };
     peer.onconnectionstatechange = () => {
-      if (peer.connectionState === 'connected') setConnectionState('connected');
-      if (['failed', 'closed', 'disconnected'].includes(peer.connectionState)) removePeer(peerId);
+      if (peer.connectionState === 'connected') {
+        setConnectionState('connected');
+        setError(null);
+      }
+      if (peer.connectionState === 'failed') {
+        setConnectionState('failed');
+        setError('The call could not establish a media connection. Please try again.');
+        removePeer(peerId);
+      } else if (['closed', 'disconnected'].includes(peer.connectionState)) {
+        removePeer(peerId);
+      }
     };
     peer.oniceconnectionstatechange = () => {
       if (peer.iceConnectionState === 'failed') {
@@ -164,15 +174,30 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
       if (payload.type === 'offer' && payload.sdp) {
         const peer = createPeer(payload.from, false);
         await peer.setRemoteDescription(payload.sdp);
+        const queuedCandidates = pendingIceRef.current[payload.from] || [];
+        delete pendingIceRef.current[payload.from];
+        await Promise.all(queuedCandidates.map(candidate => peer.addIceCandidate(candidate).catch(() => undefined)));
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
         if (peer.localDescription) sendSignal({ type: 'answer', to: payload.from, sdp: peer.localDescription.toJSON() });
         return;
       }
       const peer = peersRef.current[payload.from];
+      if (payload.type === 'ice' && payload.candidate) {
+        if (!peer || !peer.remoteDescription) {
+          pendingIceRef.current[payload.from] = [...(pendingIceRef.current[payload.from] || []), payload.candidate];
+          return;
+        }
+        await peer.addIceCandidate(payload.candidate).catch(() => undefined);
+        return;
+      }
       if (!peer) return;
-      if (payload.type === 'answer' && payload.sdp) await peer.setRemoteDescription(payload.sdp);
-      if (payload.type === 'ice' && payload.candidate) await peer.addIceCandidate(payload.candidate).catch(() => undefined);
+      if (payload.type === 'answer' && payload.sdp) {
+        await peer.setRemoteDescription(payload.sdp);
+        const queuedCandidates = pendingIceRef.current[payload.from] || [];
+        delete pendingIceRef.current[payload.from];
+        await Promise.all(queuedCandidates.map(candidate => peer.addIceCandidate(candidate).catch(() => undefined)));
+      }
     };
 
     roomChannel.on('broadcast', { event: 'signal' }, handleSignal).subscribe(async status => {
@@ -196,7 +221,13 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
         localStreamRef.current = stream;
         setLocalStream(stream);
         stream.getVideoTracks().forEach(track => { track.enabled = modeRef.current === 'video'; });
+        // Broadcast several joins because realtime broadcasts are not durable;
+        // this covers the other user's call view mounting after the invite.
         sendSignal({ type: 'join', mode: modeRef.current });
+        const joinRetryTimer = window.setInterval(() => {
+          if (!cancelled) sendSignal({ type: 'join', mode: modeRef.current });
+        }, 1000);
+        window.setTimeout(() => window.clearInterval(joinRetryTimer), 10000);
       } catch (mediaError) {
         const name = (mediaError as DOMException)?.name;
         setConnectionState('failed');
@@ -214,6 +245,7 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
       cancelled = true;
       sendSignal({ type: 'leave' });
       Object.keys(peersRef.current).forEach(removePeer);
+      pendingIceRef.current = {};
       channelRef.current = null;
       void supabase.removeChannel(roomChannel);
       localStreamRef.current?.getTracks().forEach(track => track.stop());

@@ -7,6 +7,7 @@ import {
   Grid, Layout, Smile, Wand2, ShieldCheck, Flame, Zap, Minimize2, Copy, LogOut
 } from 'lucide-react';
 import { canAccessChannel, useWorkspace, RecordedHuddle } from '../../context';
+import { supabase } from '../../lib/supabase';
 import { getTranslation } from '../../utils/i18n';
 import { UserAvatar } from '../UserAvatar';
 import { useWebRTCCall } from '../../hooks/useWebRTCCall';
@@ -208,6 +209,10 @@ export function HuddlesView() {
       return { id: participant.id, name: user?.name || 'Guest', avatarUrl: user?.avatarUrl, isLocal: false };
     })
   ].filter((user, index, list) => list.findIndex(item => item.id === user.id) === index);
+  const featuredParticipant = liveParticipantUsers.find(participant => !participant.isLocal) || liveParticipantUsers[0];
+  const featuredUser = featuredParticipant ? users.find(user => user.id === featuredParticipant.id) || (featuredParticipant.id === currentUser?.id ? currentUser : undefined) : currentUser;
+  const localDisplayName = currentUser?.name || 'You';
+  const featuredDisplayName = featuredParticipant?.name || localDisplayName;
   const inviteableUsers = users.filter(user => user.id !== currentUser?.id && !liveParticipantUsers.some(participant => participant.id === user.id) && user.name.toLowerCase().includes(inviteSearch.toLowerCase()));
   const [currentTimeStr, setCurrentTimeStr] = useState(() => {
     const now = new Date();
@@ -329,6 +334,21 @@ export function HuddlesView() {
     window.addEventListener('start-shared-huddle', handleSharedHuddle);
     return () => window.removeEventListener('start-shared-huddle', handleSharedHuddle);
   }, [activeHuddle.inCall, currentUser?.id, startGlobalHuddle, visibleChannels]);
+
+  // DM callers send the invite on a private per-user channel. HuddlesView is
+  // mounted globally, so the recipient can accept without opening Huddles first.
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    const inviteChannel = supabase.channel(`deskflow-call-invite-${currentUser.id}`, {
+      config: { broadcast: { self: false } }
+    });
+    inviteChannel.on('broadcast', { event: 'invite' }, ({ payload }: { payload?: { from?: string; roomCode?: string; video?: boolean } }) => {
+      if (!payload?.from || !payload.roomCode || activeHuddle.inCall) return;
+      startGlobalHuddle(payload.from, 'person', payload.roomCode, Boolean(payload.video));
+      window.dispatchEvent(new CustomEvent('workspace-navigate', { detail: { view: 'huddles' } }));
+    }).subscribe();
+    return () => { void supabase.removeChannel(inviteChannel); };
+  }, [activeHuddle.inCall, currentUser?.id, startGlobalHuddle]);
 
   const stopAllMedia = () => {
     if (cameraStreamRef.current) {
@@ -1372,14 +1392,13 @@ export function HuddlesView() {
               />
             </>
           ) : (
-            /* Main Participant Stage Card (Mohammed Dwidar avatar & name tag) */
             <div className="flex flex-col items-center justify-center select-none animate-fade-in relative z-10">
               <div className="relative mb-3">
-                <img 
-                  src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=300" 
-                  alt="Mohammed Dwidar"
-                  className="w-24 h-24 sm:w-32 sm:h-32 md:w-36 md:h-36 rounded-full border-2 border-white/20 shadow-2xl object-cover bg-gray-800"
-                />
+                {featuredUser ? (
+                  <UserAvatar user={featuredUser} className="w-24 h-24 sm:w-32 sm:h-32 md:w-36 md:h-36 rounded-full border-2 border-white/20 shadow-2xl object-cover bg-gray-800" alt={featuredDisplayName} />
+                ) : (
+                  <div className="w-24 h-24 sm:w-32 sm:h-32 md:w-36 md:h-36 rounded-full border-2 border-white/20 shadow-2xl bg-gray-800" />
+                )}
                 {micLevel > 15 && (
                   <div className="absolute inset-0 rounded-full border-4 border-emerald-400 animate-ping opacity-75 pointer-events-none" />
                 )}
@@ -1390,7 +1409,7 @@ export function HuddlesView() {
           {/* Bottom-Left Name Tag on Main Stage Tile */}
           <div className="absolute bottom-3 left-3 sm:bottom-4 sm:left-4 z-20">
             <span className="text-[11px] sm:text-xs md:text-sm text-white font-medium px-2.5 py-1 bg-black/40 backdrop-blur-md rounded-md tracking-wide">
-              Mohammed Dwidar
+              {featuredDisplayName}
             </span>
           </div>
 
@@ -1406,16 +1425,16 @@ export function HuddlesView() {
                 style={{ transform: 'scaleX(-1)' }}
               />
             ) : (
-              <img 
-                src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200" 
-                alt="abdallah mohamed"
-                className="w-10 h-10 sm:w-14 sm:h-14 md:w-16 md:h-16 rounded-full border border-white/20 object-cover shadow-lg"
-              />
+              currentUser ? (
+                <UserAvatar user={currentUser} className="w-10 h-10 sm:w-14 sm:h-14 md:w-16 md:h-16 rounded-full border border-white/20 object-cover shadow-lg" alt={localDisplayName} />
+              ) : (
+                <div className="w-10 h-10 sm:w-14 sm:h-14 md:w-16 md:h-16 rounded-full border border-white/20 bg-gray-800" />
+              )
             )}
             {/* Bottom-Left Name Label inside Self View PiP Box */}
             <div className="absolute bottom-1.5 left-1.5 sm:bottom-2 sm:left-2 z-30">
               <span className="text-[9px] sm:text-[11px] text-white font-medium px-1.5 py-0.5 bg-black/50 backdrop-blur-md rounded-md truncate max-w-[80px] sm:max-w-none block">
-                abdallah mohamed
+                {localDisplayName}
               </span>
             </div>
           </div>
@@ -1426,7 +1445,7 @@ export function HuddlesView() {
         {showClosedCaptions && (
           <div className="absolute bottom-20 sm:bottom-24 left-1/2 -translate-x-1/2 bg-[#121418]/90 backdrop-blur-md border border-blue-500/40 px-3 sm:px-6 py-1.5 sm:py-2 rounded-full text-[11px] sm:text-xs font-medium text-white shadow-2xl flex items-center space-x-2 sm:space-x-3 z-30 animate-fade-in max-w-[90%] sm:max-w-xl">
             <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping shrink-0" />
-            <span className="text-blue-400 font-bold shrink-0">{currentUser?.name || "abdallah mohamed"}:</span>
+            <span className="text-blue-400 font-bold shrink-0">{localDisplayName}:</span>
             <span className="truncate text-gray-200 font-sans">"{liveCaptionText}"</span>
           </div>
         )}
@@ -1661,7 +1680,7 @@ export function HuddlesView() {
 
               <div className="flex items-center justify-between p-2.5 bg-[#111215] rounded-xl border border-gray-800">
                 <span className="text-gray-400 font-medium">Host:</span>
-                <span className="font-bold text-emerald-400">Mohammed Dwidar</span>
+                <span className="font-bold text-emerald-400">{localDisplayName}</span>
               </div>
             </div>
 
