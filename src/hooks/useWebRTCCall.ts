@@ -1,0 +1,190 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { supabase } from '../lib/supabase';
+
+type CallSignal = {
+  type: 'join' | 'leave' | 'offer' | 'answer' | 'ice' | 'media';
+  from: string;
+  to?: string;
+  sdp?: RTCSessionDescriptionInit;
+  candidate?: RTCIceCandidateInit;
+  mode?: 'audio' | 'video';
+};
+
+export interface CallParticipant {
+  id: string;
+  joinedAt: number;
+  mode?: 'audio' | 'video';
+}
+
+interface UseWebRTCCallOptions {
+  roomId: string | null;
+  userId: string | null;
+  mode: 'audio' | 'video';
+  enabled: boolean;
+}
+
+const rtcConfig: RTCConfiguration = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' }
+  ]
+};
+
+export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOptions) {
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
+  const [participants, setParticipants] = useState<CallParticipant[]>([]);
+  const [connectionState, setConnectionState] = useState<'idle' | 'connecting' | 'connected' | 'failed'>('idle');
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const peersRef = useRef<Record<string, RTCPeerConnection>>({});
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const roomIdRef = useRef(roomId);
+  const userIdRef = useRef(userId);
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+
+  const sendSignal = useCallback((signal: Omit<CallSignal, 'from'>) => {
+    const channel = channelRef.current;
+    const from = userIdRef.current;
+    if (!channel || !from) return;
+    void channel.send({ type: 'broadcast', event: 'signal', payload: { ...signal, from } });
+  }, []);
+
+  const removePeer = useCallback((peerId: string) => {
+    peersRef.current[peerId]?.close();
+    delete peersRef.current[peerId];
+    setRemoteStreams(previous => {
+      const next = { ...previous };
+      delete next[peerId];
+      return next;
+    });
+    setParticipants(previous => previous.filter(participant => participant.id !== peerId));
+  }, []);
+
+  const createPeer = useCallback((peerId: string, initiator: boolean) => {
+    const existing = peersRef.current[peerId];
+    if (existing) return existing;
+    const peer = new RTCPeerConnection(rtcConfig);
+    peersRef.current[peerId] = peer;
+    localStreamRef.current?.getTracks().forEach(track => peer.addTrack(track, localStreamRef.current as MediaStream));
+    peer.onicecandidate = event => {
+      if (event.candidate) sendSignal({ type: 'ice', to: peerId, candidate: event.candidate.toJSON() });
+    };
+    peer.ontrack = event => {
+      const stream = event.streams[0];
+      if (!stream) return;
+      setRemoteStreams(previous => ({ ...previous, [peerId]: stream }));
+      setParticipants(previous => previous.some(item => item.id === peerId) ? previous : [...previous, { id: peerId, joinedAt: Date.now(), mode: modeRef.current }]);
+    };
+    peer.onconnectionstatechange = () => {
+      if (peer.connectionState === 'connected') setConnectionState('connected');
+      if (['failed', 'closed', 'disconnected'].includes(peer.connectionState)) removePeer(peerId);
+    };
+    if (initiator) {
+      void peer.createOffer().then(offer => peer.setLocalDescription(offer)).then(() => {
+        if (peer.localDescription) sendSignal({ type: 'offer', to: peerId, sdp: peer.localDescription.toJSON() });
+      });
+    }
+    return peer;
+  }, [removePeer, sendSignal]);
+
+  useEffect(() => {
+    roomIdRef.current = roomId;
+    userIdRef.current = userId;
+  }, [roomId, userId]);
+
+  useEffect(() => {
+    if (!enabled || !roomId || !userId) return;
+    let cancelled = false;
+    const roomChannel = supabase.channel(`deskflow-call-${roomId}`, { config: { broadcast: { self: false } } });
+    channelRef.current = roomChannel;
+    setConnectionState('connecting');
+
+    const handleSignal = async ({ payload }: { payload: CallSignal }) => {
+      if (cancelled || payload.from === userId || (payload.to && payload.to !== userId)) return;
+      if (payload.type === 'join') {
+        setParticipants(previous => previous.some(item => item.id === payload.from) ? previous : [...previous, { id: payload.from, joinedAt: Date.now(), mode: payload.mode }]);
+        // Deterministic initiator avoids offer glare in the mesh.
+        if (userId < payload.from) createPeer(payload.from, true);
+        return;
+      }
+      if (payload.type === 'leave') {
+        removePeer(payload.from);
+        return;
+      }
+      if (payload.type === 'offer' && payload.sdp) {
+        const peer = createPeer(payload.from, false);
+        await peer.setRemoteDescription(payload.sdp);
+        const answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
+        if (peer.localDescription) sendSignal({ type: 'answer', to: payload.from, sdp: peer.localDescription.toJSON() });
+        return;
+      }
+      const peer = peersRef.current[payload.from];
+      if (!peer) return;
+      if (payload.type === 'answer' && payload.sdp) await peer.setRemoteDescription(payload.sdp);
+      if (payload.type === 'ice' && payload.candidate) await peer.addIceCandidate(payload.candidate).catch(() => undefined);
+    };
+
+    roomChannel.on('broadcast', { event: 'signal' }, handleSignal).subscribe(async status => {
+      if (status !== 'SUBSCRIBED' || cancelled) return;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: modeRef.current === 'video', audio: true });
+        if (cancelled) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
+        localStreamRef.current = stream;
+        setLocalStream(stream);
+        stream.getVideoTracks().forEach(track => { track.enabled = modeRef.current === 'video'; });
+        sendSignal({ type: 'join', mode: modeRef.current });
+      } catch {
+        setConnectionState('failed');
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      sendSignal({ type: 'leave' });
+      Object.keys(peersRef.current).forEach(removePeer);
+      channelRef.current = null;
+      void supabase.removeChannel(roomChannel);
+      localStreamRef.current?.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+      setLocalStream(null);
+      setRemoteStreams({});
+      setParticipants([]);
+      setConnectionState('idle');
+    };
+  }, [createPeer, enabled, removePeer, roomId, sendSignal, userId]);
+
+  const setMicEnabled = useCallback((enabledValue: boolean) => {
+    localStreamRef.current?.getAudioTracks().forEach(track => { track.enabled = enabledValue; });
+  }, []);
+
+  const setCameraEnabled = useCallback(async (enabledValue: boolean) => {
+    if (!enabledValue) {
+      localStreamRef.current?.getVideoTracks().forEach(track => { track.enabled = false; });
+      return;
+    }
+    if (!localStreamRef.current) return;
+    let videoTracks = localStreamRef.current.getVideoTracks();
+    if (!videoTracks.length && navigator.mediaDevices?.getUserMedia) {
+      try {
+        const cameraStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        const cameraTrack = cameraStream.getVideoTracks()[0];
+        if (cameraTrack) {
+          localStreamRef.current.addTrack(cameraTrack);
+          videoTracks = [cameraTrack];
+          Object.values(peersRef.current as Record<string, RTCPeerConnection>).forEach((peer: RTCPeerConnection) => peer.addTrack(cameraTrack, localStreamRef.current as MediaStream));
+          setLocalStream(new MediaStream(localStreamRef.current.getTracks()));
+        }
+      } catch {
+        return;
+      }
+    }
+    videoTracks.forEach(track => { track.enabled = true; });
+  }, []);
+
+  return { localStream, remoteStreams, participants, connectionState, setMicEnabled, setCameraEnabled };
+}

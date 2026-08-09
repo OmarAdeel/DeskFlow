@@ -135,6 +135,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const callCode = new URLSearchParams(window.location.search).get('call');
+    if (!callCode || !isAuthenticated || !currentUser) return;
+    setCurrentView('huddles');
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('join-shared-call', { detail: { code: callCode } }));
+    }, 250);
+  }, [currentUser, isAuthenticated]);
+
+  useEffect(() => {
+    const handleSharedCallJoin = (event: Event) => {
+      const code = (event as CustomEvent<{ code?: string }>).detail?.code;
+      if (code) window.dispatchEvent(new CustomEvent('start-shared-huddle', { detail: { code } }));
+    };
     const handleNav = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail) {
@@ -159,10 +172,12 @@ export default function App() {
 
     window.addEventListener('workspace-navigate', handleNav);
     window.addEventListener('open-new-message-modal', handleOpenModal);
+    window.addEventListener('join-shared-call', handleSharedCallJoin);
 
     return () => {
       window.removeEventListener('workspace-navigate', handleNav);
       window.removeEventListener('open-new-message-modal', handleOpenModal);
+      window.removeEventListener('join-shared-call', handleSharedCallJoin);
     };
   }, []);
 

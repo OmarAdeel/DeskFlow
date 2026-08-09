@@ -9,6 +9,7 @@ import {
 import { canAccessChannel, useWorkspace, RecordedHuddle } from '../../context';
 import { getTranslation } from '../../utils/i18n';
 import { UserAvatar } from '../UserAvatar';
+import { useWebRTCCall } from '../../hooks/useWebRTCCall';
 import '@tensorflow/tfjs-core';
 import '@tensorflow/tfjs-backend-webgl';
 import '@tensorflow/tfjs-converter';
@@ -30,6 +31,16 @@ export function HuddlesView() {
     inCall, videoEnabled, micEnabled, screenSharing, isRecording, recordingSeconds,
     handRaised, showNotesDrawer, huddleNotes, layoutMode, micLevel, targetId: huddleTargetId, targetType: huddleTargetType
   } = activeHuddle;
+
+  const callRoomUrl = `${window.location.origin}${window.location.pathname}?view=huddles&call=${encodeURIComponent(activeHuddle.code || '')}`;
+  const { localStream, remoteStreams, participants: liveParticipants, connectionState, setMicEnabled, setCameraEnabled } = useWebRTCCall({
+    roomId: inCall ? activeHuddle.code : null,
+    userId: currentUser?.id || null,
+    mode: videoEnabled ? 'video' : 'audio',
+    enabled: inCall
+  });
+  const [inviteSearch, setInviteSearch] = useState('');
+  const [inviteCopied, setInviteCopied] = useState(false);
 
   // Floating reactions state
   const [activeReactions, setActiveReactions] = useState<{ id: string; emoji: string; left: number }[]>([]);
@@ -190,6 +201,14 @@ export function HuddlesView() {
   const [showParticipantsDrawer, setShowParticipantsDrawer] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const meetingCode = activeHuddle.code || "sef-kdkv-jhx";
+  const liveParticipantUsers = [
+    ...(currentUser ? [{ id: currentUser.id, name: currentUser.name, avatarUrl: currentUser.avatarUrl, isLocal: true }] : []),
+    ...liveParticipants.map(participant => {
+      const user = users.find(item => item.id === participant.id);
+      return { id: participant.id, name: user?.name || 'Guest', avatarUrl: user?.avatarUrl, isLocal: false };
+    })
+  ].filter((user, index, list) => list.findIndex(item => item.id === user.id) === index);
+  const inviteableUsers = users.filter(user => user.id !== currentUser?.id && !liveParticipantUsers.some(participant => participant.id === user.id) && user.name.toLowerCase().includes(inviteSearch.toLowerCase()));
   const [currentTimeStr, setCurrentTimeStr] = useState(() => {
     const now = new Date();
     return now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -299,6 +318,17 @@ export function HuddlesView() {
       startGlobalHuddle(selectedId, selectedType);
     }
   };
+
+  useEffect(() => {
+    const handleSharedHuddle = (event: Event) => {
+      const code = (event as CustomEvent<{ code?: string }>).detail?.code;
+      if (!code || activeHuddle.inCall) return;
+      const fallbackTarget = visibleChannels[0]?.id || currentUser?.id || 'shared-room';
+      startGlobalHuddle(fallbackTarget, visibleChannels[0]?.id ? 'channel' : 'person', code);
+    };
+    window.addEventListener('start-shared-huddle', handleSharedHuddle);
+    return () => window.removeEventListener('start-shared-huddle', handleSharedHuddle);
+  }, [activeHuddle.inCall, currentUser?.id, startGlobalHuddle, visibleChannels]);
 
   const stopAllMedia = () => {
     if (cameraStreamRef.current) {
@@ -454,6 +484,14 @@ export function HuddlesView() {
   }, [inCall, echoCancellationActive, noiseSuppressionActive, aiKrispNoiseCancel, autoGainControlActive]);
 
   useEffect(() => {
+    setMicEnabled(micEnabled);
+  }, [micEnabled, setMicEnabled]);
+
+  useEffect(() => {
+    setCameraEnabled(videoEnabled);
+  }, [videoEnabled, setCameraEnabled]);
+
+  useEffect(() => {
     if (inCall && microphoneStreamRef.current) {
       microphoneStreamRef.current.getAudioTracks().forEach(track => {
         track.enabled = micEnabled;
@@ -471,6 +509,12 @@ export function HuddlesView() {
 
   // Simultaneous Camera + Screen Share Video element binding logic
   useEffect(() => {
+    if (localStream && videoRef.current && videoEnabled && !screenSharing) {
+      videoRef.current.srcObject = localStream;
+    }
+    if (localStream && pipVideoRef.current && videoEnabled) {
+      pipVideoRef.current.srcObject = localStream;
+    }
     if (inCall) {
       if (screenSharing && screenStreamRef.current && videoRef.current) {
         videoRef.current.srcObject = screenStreamRef.current;
@@ -1231,21 +1275,14 @@ export function HuddlesView() {
           <button
             onClick={() => setShowParticipantsDrawer(!showParticipantsDrawer)}
             className="flex items-center space-x-1.5 bg-[#282B34] hover:bg-[#323642] px-2 sm:px-2.5 py-1 rounded-full text-xs font-semibold text-gray-200 transition border border-gray-700/60 cursor-pointer"
-            title="Participants (2)"
+            title={`Participants (${Math.max(1, liveParticipantUsers.length)})`}
           >
             <div className="flex -space-x-1.5 rtl:space-x-reverse">
-              <img 
-                src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=100" 
-                className="w-4 h-4 rounded-full border border-gray-900 object-cover" 
-                alt="MD" 
-              />
-              <img 
-                src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=100" 
-                className="w-4 h-4 rounded-full border border-gray-900 object-cover" 
-                alt="AM" 
-              />
+              {liveParticipantUsers.slice(0, 3).map(participant => (
+                <span key={participant.id}><UserAvatar user={users.find(user => user.id === participant.id) || { id: participant.id, name: participant.name, email: '', role: 'Member', avatarUrl: participant.avatarUrl }} className="w-4 h-4 rounded-full border border-gray-900 object-cover" alt={participant.name} /></span>
+              ))}
             </div>
-            <span className="text-[11px] font-bold text-white">2</span>
+            <span className="text-[11px] font-bold text-white">{Math.max(1, liveParticipantUsers.length)}</span>
           </button>
         </div>
       </div>
@@ -1279,6 +1316,17 @@ export function HuddlesView() {
               style={{ backgroundImage: `url(${getBackgroundUrl(selectedVirtualBackground)})` }}
             />
           )}
+
+          {/* Remote participant tiles received over the WebRTC mesh */}
+          {Object.entries(remoteStreams).map(([participantId, stream]) => {
+            const participant = users.find(user => user.id === participantId);
+            return (
+              <div key={participantId} className="absolute top-3 left-3 sm:top-4 sm:left-4 z-30 w-36 h-24 sm:w-52 sm:h-32 rounded-xl overflow-hidden border border-emerald-400/50 bg-black shadow-2xl">
+                <video ref={node => { if (node) node.srcObject = stream; }} autoPlay playsInline className="w-full h-full object-cover" />
+                <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded bg-black/60 text-[10px] text-white">{participant?.name || 'Participant'}</span>
+              </div>
+            );
+          })}
 
           {/* Main Stage Video Feed (Camera or Screen Share) */}
           {(videoEnabled || screenSharing) ? (
@@ -1579,10 +1627,10 @@ export function HuddlesView() {
               <div>
                 <p className="text-gray-400 text-[10px] uppercase font-bold tracking-wider mb-1">Joining Info</p>
                 <div className="bg-[#111215] border border-gray-800 p-2.5 rounded-xl font-mono text-[11px] text-blue-400 break-all flex items-center justify-between">
-                  <span>https://meet.workspace.app/{meetingCode}</span>
+                  <span>{callRoomUrl}</span>
                   <button
                     onClick={() => {
-                      navigator.clipboard.writeText(`https://meet.workspace.app/${meetingCode}`);
+                      navigator.clipboard.writeText(callRoomUrl);
                       setCopiedLink(true);
                       setTimeout(() => setCopiedLink(false), 2000);
                     }}
@@ -1623,7 +1671,7 @@ export function HuddlesView() {
           <div className="flex items-center justify-between pb-3 border-b border-gray-800 mb-4">
             <div className="flex items-center space-x-2 rtl:space-x-reverse">
               <Users className="h-4 w-4 text-blue-400" />
-              <h3 className="text-xs font-bold text-white uppercase tracking-wider">People (2)</h3>
+              <h3 className="text-xs font-bold text-white uppercase tracking-wider">People ({Math.max(1, liveParticipantUsers.length)})</h3>
             </div>
             <button onClick={() => setShowParticipantsDrawer(false)} className="text-gray-400 hover:text-white p-1">
               <X className="h-4 w-4" />
@@ -1631,27 +1679,31 @@ export function HuddlesView() {
           </div>
 
           <div className="flex-1 space-y-2 overflow-y-auto">
-            <div className="p-2.5 bg-[#1C1E23] rounded-xl border border-gray-800 flex items-center justify-between">
-              <div className="flex items-center space-x-2.5 rtl:space-x-reverse">
-                <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=100" className="w-8 h-8 rounded-full object-cover" alt="MD" />
-                <div>
-                  <h4 className="text-xs font-bold text-white">Mohammed Dwidar</h4>
-                  <span className="text-[10px] text-emerald-400 font-mono">Meeting Host</span>
+            {liveParticipantUsers.map(participant => (
+              <div key={participant.id} className="p-2.5 bg-[#1C1E23] rounded-xl border border-gray-800 flex items-center justify-between">
+                <div className="flex items-center space-x-2.5 rtl:space-x-reverse min-w-0">
+                  <UserAvatar user={users.find(user => user.id === participant.id) || { id: participant.id, name: participant.name, email: '', role: 'Member', avatarUrl: participant.avatarUrl }} className="w-8 h-8 rounded-full object-cover" alt={participant.name} />
+                  <div className="min-w-0">
+                    <h4 className="text-xs font-bold text-white truncate">{participant.name} {participant.isLocal ? '(You)' : ''}</h4>
+                    <span className="text-[10px] text-gray-400">{participant.isLocal ? (connectionState === 'connected' ? 'Connected' : 'Connecting…') : 'Live participant'}</span>
+                  </div>
                 </div>
+                {participant.isLocal && (micEnabled ? <Mic className="h-3.5 w-3.5 text-emerald-400" /> : <MicOff className="h-3.5 w-3.5 text-red-400" />)}
               </div>
-              <Mic className="h-3.5 w-3.5 text-emerald-400" />
+            ))}
+            {liveParticipantUsers.length <= 1 && <p className="text-xs text-gray-500 text-center py-4">Share the call link to invite teammates.</p>}
+          </div>
+          <div className="border-t border-gray-800 pt-3 mt-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <input value={inviteSearch} onChange={event => setInviteSearch(event.target.value)} placeholder="Find people to invite" className="min-w-0 flex-1 bg-[#1C1E23] border border-gray-700 rounded-lg px-2.5 py-2 text-xs text-white outline-none focus:border-blue-500" />
+              <button onClick={() => { navigator.clipboard.writeText(callRoomUrl); setInviteCopied(true); setTimeout(() => setInviteCopied(false), 1800); }} className="shrink-0 p-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white" title="Copy invite link">{inviteCopied ? <Check className="h-4 w-4" /> : <Share2 className="h-4 w-4" />}</button>
             </div>
-
-            <div className="p-2.5 bg-[#1C1E23] rounded-xl border border-gray-800 flex items-center justify-between">
-              <div className="flex items-center space-x-2.5 rtl:space-x-reverse">
-                <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=100" className="w-8 h-8 rounded-full object-cover" alt="AM" />
-                <div>
-                  <h4 className="text-xs font-bold text-white">abdallah mohamed</h4>
-                  <span className="text-[10px] text-gray-400">You</span>
-                </div>
-              </div>
-              <MicOff className="h-3.5 w-3.5 text-red-400" />
-            </div>
+            {inviteSearch && inviteableUsers.slice(0, 4).map(user => (
+              <button key={user.id} onClick={() => { navigator.clipboard.writeText(callRoomUrl); setInviteSearch(''); setInviteCopied(true); setTimeout(() => setInviteCopied(false), 1800); }} className="w-full flex items-center gap-2 p-2 rounded-lg hover:bg-gray-800 text-left">
+                <UserAvatar user={user} className="w-6 h-6 rounded-full" alt={user.name} />
+                <span className="text-xs text-gray-200 truncate">Invite {user.name}</span>
+              </button>
+            ))}
           </div>
         </div>
       )}

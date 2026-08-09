@@ -205,7 +205,7 @@ interface WorkspaceContextProps {
 
   // Global Persistent Active Huddle State & Actions
   activeHuddle: ActiveHuddleState;
-  startGlobalHuddle: (targetId: string, targetType: 'person' | 'channel') => void;
+  startGlobalHuddle: (targetId: string, targetType: 'person' | 'channel', roomCode?: string) => void;
   endGlobalHuddle: () => void;
   toggleHuddleMic: () => void;
   toggleHuddleVideo: () => void;
@@ -418,11 +418,11 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
 
   const recordingTimerRef = useRef<number | null>(null);
 
-  const startGlobalHuddle = (targetId: string, targetType: 'person' | 'channel') => {
+  const startGlobalHuddle = (targetId: string, targetType: 'person' | 'channel', roomCode?: string) => {
     const defaultX = typeof window !== 'undefined' ? Math.max(20, window.innerWidth - 360) : 100;
     const defaultY = typeof window !== 'undefined' ? Math.max(20, window.innerHeight - 200) : 100;
     const part = () => Math.random().toString(36).substring(2, 5);
-    const generatedCode = `${part()}-${part()}-${part()}`;
+    const generatedCode = roomCode || `${part()}-${part()}-${part()}`;
 
     setActiveHuddle({
       inCall: true,

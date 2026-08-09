@@ -35,7 +35,7 @@ interface DMMessage {
 }
 
 export function DMsView({ userId }: { userId?: string }) {
-  const { users, currentUser, presenceByUserId, userStatus, organizations, agents, messages, channels, activeOrganizationId, isAuthenticated, dmUnreadByUserId, markDmRead } = useWorkspace();
+  const { users, currentUser, presenceByUserId, userStatus, organizations, agents, messages, channels, activeOrganizationId, isAuthenticated, dmUnreadByUserId, markDmRead, startGlobalHuddle, toggleHuddleVideo } = useWorkspace();
   const usersRef = useRef(users);
   const organizationUsers = users.filter(user => {
     if (!activeOrganizationId) return true;
@@ -442,29 +442,11 @@ export function DMsView({ userId }: { userId?: string }) {
   const callVideoRef = useRef<HTMLVideoElement>(null);
   const callTimerRef = useRef<number | null>(null);
 
-  const handleStartCall = async (mode: 'audio' | 'video') => {
-    setActiveCall({ mode, user: selectedUser });
-    setIsCallMuted(false);
-    setIsCallVideoOff(mode === 'audio');
-    setIsCallScreenSharing(false);
-    setCallDuration(0);
-
-    if (callTimerRef.current) clearInterval(callTimerRef.current);
-    callTimerRef.current = window.setInterval(() => {
-      setCallDuration(prev => prev + 1);
-    }, 1000);
-
-    try {
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: mode === 'video',
-          audio: true
-        });
-        setMediaStream(stream);
-      }
-    } catch (err) {
-      console.warn("Could not acquire camera/microphone stream:", err);
-    }
+  const handleStartCall = (mode: 'audio' | 'video') => {
+    if (!selectedUser?.id) return;
+    startGlobalHuddle(selectedUser.id, 'person');
+    if (mode === 'video') window.setTimeout(() => toggleHuddleVideo(), 0);
+    window.dispatchEvent(new CustomEvent('workspace-navigate', { detail: { view: 'huddles' } }));
   };
 
   const formatCallDuration = (seconds: number) => {
