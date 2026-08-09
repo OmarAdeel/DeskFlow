@@ -7,6 +7,7 @@ import {
   Grid, Layout, Smile, Wand2, ShieldCheck, Flame, Zap, Minimize2, Copy, LogOut
 } from 'lucide-react';
 import { canAccessChannel, useWorkspace, RecordedHuddle } from '../../context';
+import { supabase } from '../../lib/supabase';
 
 import { getTranslation } from '../../utils/i18n';
 import { UserAvatar } from '../UserAvatar';
@@ -323,6 +324,28 @@ export function HuddlesView() {
       setIsNewHuddleModalOpen(false);
       startGlobalHuddle(selectedId, selectedType);
     }
+  };
+
+  const inviteUserToCall = (userId: string) => {
+    if (!currentUser?.id || !activeHuddle.code) return;
+    const inviteChannel = supabase.channel(`deskflow-call-invite-${userId}`, {
+      config: { broadcast: { self: false } }
+    });
+    inviteChannel.subscribe(status => {
+      if (status !== 'SUBSCRIBED') return;
+      void inviteChannel.send({
+        type: 'broadcast',
+        event: 'invite',
+        payload: {
+          from: currentUser.id,
+          fromName: currentUser.name,
+          fromAvatarUrl: currentUser.avatarUrl,
+          roomCode: activeHuddle.code,
+          video: activeHuddle.videoEnabled
+        }
+      });
+      window.setTimeout(() => { void supabase.removeChannel(inviteChannel); }, 1500);
+    });
   };
 
   useEffect(() => {
@@ -1717,7 +1740,7 @@ export function HuddlesView() {
               <button onClick={() => { navigator.clipboard.writeText(callRoomUrl); setInviteCopied(true); setTimeout(() => setInviteCopied(false), 1800); }} className="shrink-0 p-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white" title="Copy invite link">{inviteCopied ? <Check className="h-4 w-4" /> : <Share2 className="h-4 w-4" />}</button>
             </div>
             {inviteSearch && inviteableUsers.slice(0, 4).map(user => (
-              <button key={user.id} onClick={() => { navigator.clipboard.writeText(callRoomUrl); setInviteSearch(''); setInviteCopied(true); setTimeout(() => setInviteCopied(false), 1800); }} className="w-full flex items-center gap-2 p-2 rounded-lg hover:bg-gray-800 text-left">
+              <button key={user.id} onClick={() => { inviteUserToCall(user.id); setInviteSearch(''); setInviteCopied(true); setTimeout(() => setInviteCopied(false), 1800); }} className="w-full flex items-center gap-2 p-2 rounded-lg hover:bg-gray-800 text-left">
                 <UserAvatar user={user} className="w-6 h-6 rounded-full" alt={user.name} />
                 <span className="text-xs text-gray-200 truncate">Invite {user.name}</span>
               </button>

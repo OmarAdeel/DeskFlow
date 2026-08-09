@@ -103,7 +103,24 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
     setParticipants(previous => previous.filter(participant => participant.id !== peerId));
   }, []);
 
-  const createPeer = useCallback((peerId: string, initiator: boolean) => {
+  const negotiatePeer = useCallback(async (peerId: string, peer: RTCPeerConnection) => {
+    // Repeated join broadcasts are intentional: they also recover an offer that
+    // was sent before the other browser finished subscribing to the room.
+    if (peer.signalingState === 'have-local-offer' && peer.localDescription) {
+      sendSignal({ type: 'offer', to: peerId, sdp: peer.localDescription.toJSON() });
+      return;
+    }
+    if (peer.signalingState !== 'stable' || peer.connectionState === 'connected') return;
+    try {
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      if (peer.localDescription) sendSignal({ type: 'offer', to: peerId, sdp: peer.localDescription.toJSON() });
+    } catch (negotiationError) {
+      console.warn('Unable to negotiate call peer.', negotiationError);
+    }
+  }, [sendSignal]);
+
+  const createPeer = useCallback((peerId: string) => {
     const existing = peersRef.current[peerId];
     if (existing) return existing;
     const peer = new RTCPeerConnection(rtcConfig());
@@ -136,15 +153,11 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
         // Force an ICE restart before tearing the peer down; helps recover on
         // flaky networks or when the first relay path fails to negotiate.
         try { peer.restartIce(); } catch { /* not supported */ }
+        void negotiatePeer(peerId, peer);
       }
     };
-    if (initiator) {
-      void peer.createOffer().then(offer => peer.setLocalDescription(offer)).then(() => {
-        if (peer.localDescription) sendSignal({ type: 'offer', to: peerId, sdp: peer.localDescription.toJSON() });
-      });
-    }
     return peer;
-  }, [removePeer, sendSignal]);
+  }, [negotiatePeer, removePeer, sendSignal]);
 
   useEffect(() => {
     roomIdRef.current = roomId;
@@ -164,7 +177,10 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
       if (payload.type === 'join') {
         setParticipants(previous => previous.some(item => item.id === payload.from) ? previous : [...previous, { id: payload.from, joinedAt: Date.now(), mode: payload.mode }]);
         // Deterministic initiator avoids offer glare in the mesh.
-        if (userId < payload.from) createPeer(payload.from, true);
+        if (userId < payload.from) {
+          const peer = createPeer(payload.from);
+          void negotiatePeer(payload.from, peer);
+        }
         return;
       }
       if (payload.type === 'leave') {
@@ -172,7 +188,7 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
         return;
       }
       if (payload.type === 'offer' && payload.sdp) {
-        const peer = createPeer(payload.from, false);
+        const peer = createPeer(payload.from);
         await peer.setRemoteDescription(payload.sdp);
         const queuedCandidates = pendingIceRef.current[payload.from] || [];
         delete pendingIceRef.current[payload.from];
