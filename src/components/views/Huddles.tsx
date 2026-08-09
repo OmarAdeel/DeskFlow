@@ -1,13 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Headphones, Video, MonitorUp, Mic, MicOff, VideoOff, Phone, PhoneOff, Users, AlertCircle,
+  Headphones, Video, MonitorUp, Mic, MicOff, VideoOff, PhoneOff, Users, AlertCircle,
   ExternalLink, X, ChevronDown, ChevronUp, MoreVertical, Plus, Hash, Lock, Search, Sparkles, 
   Volume2, ShieldAlert, Activity, Image, Sliders, Check, Settings, Ear, HelpCircle, 
   Info, Circle, Play, Pause, Download, Share2, FileText, CornerUpRight, Hand, MessageSquare, 
   Grid, Layout, Smile, Wand2, ShieldCheck, Flame, Zap, Minimize2, Copy, LogOut
 } from 'lucide-react';
 import { canAccessChannel, useWorkspace, RecordedHuddle } from '../../context';
-import { supabase } from '../../lib/supabase';
+
 import { getTranslation } from '../../utils/i18n';
 import { UserAvatar } from '../UserAvatar';
 import { useWebRTCCall } from '../../hooks/useWebRTCCall';
@@ -16,13 +16,6 @@ import '@tensorflow/tfjs-backend-webgl';
 import '@tensorflow/tfjs-converter';
 import * as bodySegmentation from '@tensorflow-models/body-segmentation';
 
-type IncomingCall = {
-  from: string;
-  fromName?: string;
-  fromAvatarUrl?: string;
-  roomCode: string;
-  video: boolean;
-};
 
 export function HuddlesView() {
   const { 
@@ -50,11 +43,6 @@ export function HuddlesView() {
   });
   const [inviteSearch, setInviteSearch] = useState('');
   const [inviteCopied, setInviteCopied] = useState(false);
-  const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
-  const pendingIncomingRoomRef = useRef<string | null>(null);
-  const handledIncomingRoomsRef = useRef<Set<string>>(new Set());
-  const ringtoneContextRef = useRef<AudioContext | null>(null);
-  const ringtoneIntervalRef = useRef<number | null>(null);
 
   // Floating reactions state
   const [activeReactions, setActiveReactions] = useState<{ id: string; emoji: string; left: number }[]>([]);
@@ -348,136 +336,6 @@ export function HuddlesView() {
     return () => window.removeEventListener('start-shared-huddle', handleSharedHuddle);
   }, [activeHuddle.inCall, currentUser?.id, startGlobalHuddle, visibleChannels]);
 
-  const stopIncomingRingtone = () => {
-    if (ringtoneIntervalRef.current) {
-      window.clearInterval(ringtoneIntervalRef.current);
-      ringtoneIntervalRef.current = null;
-    }
-    const context = ringtoneContextRef.current;
-    ringtoneContextRef.current = null;
-    if (context) void context.close().catch(() => undefined);
-  };
-
-  const playIncomingRingtone = () => {
-    try {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioContextClass) return;
-      const context = ringtoneContextRef.current || new AudioContextClass();
-      ringtoneContextRef.current = context;
-      if (context.state === 'suspended') void context.resume().catch(() => undefined);
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(880, context.currentTime);
-      oscillator.frequency.setValueAtTime(660, context.currentTime + 0.18);
-      gain.gain.setValueAtTime(0.0001, context.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.12, context.currentTime + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.42);
-      oscillator.connect(gain);
-      gain.connect(context.destination);
-      oscillator.start();
-      oscillator.stop(context.currentTime + 0.45);
-    } catch {
-      // Browsers may block Web Audio until a user gesture; the popup remains usable.
-    }
-  };
-
-  const startIncomingRingtone = () => {
-    stopIncomingRingtone();
-    playIncomingRingtone();
-    ringtoneIntervalRef.current = window.setInterval(playIncomingRingtone, 1800);
-  };
-
-  const sendCallResponse = (toUserId: string, roomCode: string, response: 'rejected' | 'timeout') => {
-    const responseChannel = supabase.channel(`deskflow-call-response-${toUserId}`, {
-      config: { broadcast: { self: false } }
-    });
-    responseChannel.subscribe(status => {
-      if (status !== 'SUBSCRIBED') return;
-      void responseChannel.send({
-        type: 'broadcast',
-        event: 'response',
-        payload: { from: currentUser?.id, roomCode, response }
-      });
-      window.setTimeout(() => { void supabase.removeChannel(responseChannel); }, 1500);
-    });
-  };
-
-  const clearIncomingCall = () => {
-    pendingIncomingRoomRef.current = null;
-    setIncomingCall(null);
-    stopIncomingRingtone();
-  };
-
-  const answerIncomingCall = () => {
-    if (!incomingCall) return;
-    const call = incomingCall;
-    handledIncomingRoomsRef.current.add(call.roomCode);
-    clearIncomingCall();
-    startGlobalHuddle(call.from, 'person', call.roomCode, call.video);
-    window.dispatchEvent(new CustomEvent('workspace-navigate', { detail: { view: 'huddles' } }));
-  };
-
-  const rejectIncomingCall = () => {
-    if (!incomingCall) return;
-    const call = incomingCall;
-    handledIncomingRoomsRef.current.add(call.roomCode);
-    clearIncomingCall();
-    sendCallResponse(call.from, call.roomCode, 'rejected');
-  };
-
-  // DM callers send invites on a private per-user channel. Keep the invite
-  // pending until the recipient explicitly answers or rejects it.
-  useEffect(() => {
-    if (!currentUser?.id) return;
-    const inviteChannel = supabase.channel(`deskflow-call-invite-${currentUser.id}`, {
-      config: { broadcast: { self: false } }
-    });
-    inviteChannel.on('broadcast', { event: 'invite' }, ({ payload }: { payload?: IncomingCall }) => {
-      if (!payload?.from || !payload.roomCode || payload.from === currentUser.id || activeHuddle.inCall) return;
-      if (pendingIncomingRoomRef.current === payload.roomCode || handledIncomingRoomsRef.current.has(payload.roomCode)) return;
-      pendingIncomingRoomRef.current = payload.roomCode;
-      setIncomingCall({
-        from: payload.from,
-        fromName: payload.fromName,
-        fromAvatarUrl: payload.fromAvatarUrl,
-        roomCode: payload.roomCode,
-        video: Boolean(payload.video)
-      });
-    }).subscribe();
-    return () => { void supabase.removeChannel(inviteChannel); };
-  }, [activeHuddle.inCall, currentUser?.id]);
-
-  // The caller listens for a rejection so it does not remain in a call with
-  // no peer after the recipient declines the invitation.
-  useEffect(() => {
-    if (!currentUser?.id) return;
-    const responseChannel = supabase.channel(`deskflow-call-response-${currentUser.id}`, {
-      config: { broadcast: { self: false } }
-    });
-    responseChannel.on('broadcast', { event: 'response' }, ({ payload }: { payload?: { roomCode?: string; response?: string } }) => {
-      if (!payload?.roomCode || payload.roomCode !== activeHuddle.code || !activeHuddle.inCall) return;
-      if (payload.response === 'rejected' || payload.response === 'timeout') endGlobalHuddle();
-    }).subscribe();
-    return () => { void supabase.removeChannel(responseChannel); };
-  }, [activeHuddle.code, activeHuddle.inCall, currentUser?.id, endGlobalHuddle]);
-
-  useEffect(() => {
-    if (!incomingCall) return;
-    startIncomingRingtone();
-    const timeout = window.setTimeout(() => {
-      const call = incomingCall;
-      handledIncomingRoomsRef.current.add(call.roomCode);
-      clearIncomingCall();
-      sendCallResponse(call.from, call.roomCode, 'timeout');
-    }, 45000);
-    return () => {
-      window.clearTimeout(timeout);
-      stopIncomingRingtone();
-    };
-  }, [incomingCall]);
-
-  useEffect(() => () => stopIncomingRingtone(), []);
 
   const stopAllMedia = () => {
     if (cameraStreamRef.current) {
@@ -758,61 +616,11 @@ export function HuddlesView() {
     return true;
   });
 
-  const incomingCaller = incomingCall ? users.find(user => user.id === incomingCall.from) : undefined;
-  const incomingCallerName = incomingCaller?.name || incomingCall?.fromName || 'Unknown caller';
-  const incomingCallerAvatar = incomingCaller || (incomingCall ? { name: incomingCallerName, avatarUrl: incomingCall.fromAvatarUrl } : undefined);
-  const incomingCallPopup = incomingCall ? (
-    <aside
-      className="fixed right-4 top-4 z-[100] w-[min(360px,calc(100vw-2rem))] rounded-2xl border border-blue-400/30 bg-[#121317]/95 p-4 text-white shadow-2xl shadow-black/50 backdrop-blur-xl animate-fade-in"
-      role="alertdialog"
-      aria-label={`Incoming ${incomingCall.video ? 'video' : 'voice'} call from ${incomingCallerName}`}
-    >
-      <div className="flex items-start gap-3">
-        <div className="relative shrink-0">
-          <UserAvatar
-            user={incomingCallerAvatar}
-            fallbackName={incomingCallerName}
-            className="h-12 w-12 rounded-full border-2 border-blue-400 object-cover"
-            alt={incomingCallerName}
-          />
-          <span className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-[#121317] bg-emerald-500">
-            {incomingCall.video ? <Video className="h-3 w-3 text-white" /> : <Phone className="h-3 w-3 text-white" />}
-          </span>
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-blue-300">Incoming call</div>
-          <div className="mt-1 truncate text-base font-bold">{incomingCallerName}</div>
-          <div className="mt-0.5 text-xs text-gray-400">
-            {incomingCall.video ? 'Incoming video call' : 'Incoming voice call'}
-          </div>
-        </div>
-      </div>
-      <div className="mt-4 flex gap-2">
-        <button
-          type="button"
-          onClick={rejectIncomingCall}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2.5 text-xs font-bold text-red-300 transition hover:bg-red-500/20"
-        >
-          <PhoneOff className="h-4 w-4" />
-          Reject
-        </button>
-        <button
-          type="button"
-          onClick={answerIncomingCall}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-500"
-        >
-          {incomingCall.video ? <Video className="h-4 w-4" /> : <Phone className="h-4 w-4" />}
-          Answer
-        </button>
-      </div>
-    </aside>
-  ) : null;
 
   // ------------------- MAIN DASHBOARD VIEW (NOT IN CALL) -------------------
   if (!inCall || activeHuddle.isMinimized) {
     return (
       <div className="flex flex-col h-full bg-[#1A1D21] text-gray-300 w-full overflow-hidden">
-        {incomingCallPopup}
         {/* Header with "+ New Huddle" button */}
         <div className="flex flex-wrap items-center justify-between px-3 sm:px-6 py-3 sm:py-4 border-b border-gray-800 bg-[#121317] shrink-0 gap-2">
           <div className="flex items-center space-x-2.5 sm:space-x-3 rtl:space-x-reverse select-none">
@@ -1431,8 +1239,6 @@ export function HuddlesView() {
   // ------------------- LIVE HUDDLE CALL INTERFACE (IN CALL) -------------------
   return (
     <div className="flex flex-col h-full w-full bg-[#1A1D21] text-gray-300 relative overflow-hidden select-none">
-      {incomingCallPopup}
-
       {/* Connection status / error banner */}
       {(callError || connectionState === 'connecting' || connectionState === 'failed') && (
         <div className={`absolute top-2 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold shadow-lg border ${
