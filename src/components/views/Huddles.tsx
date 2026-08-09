@@ -33,7 +33,7 @@ export function HuddlesView() {
   } = activeHuddle;
 
   const callRoomUrl = `${window.location.origin}${window.location.pathname}?view=huddles&call=${encodeURIComponent(activeHuddle.code || '')}`;
-  const { localStream, remoteStreams, participants: liveParticipants, connectionState, setMicEnabled, setCameraEnabled } = useWebRTCCall({
+  const { localStream, remoteStreams, participants: liveParticipants, connectionState, error: callError, setMicEnabled, setCameraEnabled } = useWebRTCCall({
     roomId: inCall ? activeHuddle.code : null,
     userId: currentUser?.id || null,
     mode: videoEnabled ? 'video' : 'audio',
@@ -1231,6 +1231,18 @@ export function HuddlesView() {
   // ------------------- LIVE HUDDLE CALL INTERFACE (IN CALL) -------------------
   return (
     <div className="flex flex-col h-full w-full bg-[#1A1D21] text-gray-300 relative overflow-hidden select-none">
+
+      {/* Connection status / error banner */}
+      {(callError || connectionState === 'connecting' || connectionState === 'failed') && (
+        <div className={`absolute top-2 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold shadow-lg border ${
+          callError || connectionState === 'failed'
+            ? 'bg-red-600/90 border-red-400/40 text-white'
+            : 'bg-blue-600/90 border-blue-400/40 text-white'
+        }`}>
+          {callError || connectionState === 'failed' ? <AlertCircle className="h-3.5 w-3.5 shrink-0" /> : <Activity className="h-3.5 w-3.5 shrink-0 animate-pulse" />}
+          <span className="max-w-[70vw] truncate">{callError || (connectionState === 'connecting' ? 'Connecting to call…' : 'Connection failed')}</span>
+        </div>
+      )}
       
       {/* Floating Emoji Physics Overlay */}
       <div className="absolute inset-0 pointer-events-none z-50 overflow-hidden">

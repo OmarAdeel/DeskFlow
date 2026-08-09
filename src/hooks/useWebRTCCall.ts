@@ -23,10 +23,35 @@ interface UseWebRTCCallOptions {
   enabled: boolean;
 }
 
+const turnUrl = import.meta.env.VITE_TURN_URL as string | undefined;
+const turnUsername = import.meta.env.VITE_TURN_USERNAME as string | undefined;
+const turnCredential = import.meta.env.VITE_TURN_CREDENTIAL as string | undefined;
+
 const rtcConfig: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun.cloudflare.com:3478' }
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    // Free public TURN relay so calls survive symmetric NAT/firewalls when no
+    // dedicated TURN is configured. Overridden by VITE_TURN_* when provided.
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    ...(turnUrl
+      ? [{ urls: turnUrl, username: turnUsername, credential: turnCredential }]
+      : [])
   ]
 };
 
@@ -35,6 +60,7 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
   const [participants, setParticipants] = useState<CallParticipant[]>([]);
   const [connectionState, setConnectionState] = useState<'idle' | 'connecting' | 'connected' | 'failed'>('idle');
+  const [error, setError] = useState<string | null>(null);
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const peersRef = useRef<Record<string, RTCPeerConnection>>({});
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -80,6 +106,13 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
       if (peer.connectionState === 'connected') setConnectionState('connected');
       if (['failed', 'closed', 'disconnected'].includes(peer.connectionState)) removePeer(peerId);
     };
+    peer.oniceconnectionstatechange = () => {
+      if (peer.iceConnectionState === 'failed') {
+        // Force an ICE restart before tearing the peer down; helps recover on
+        // flaky networks or when the first relay path fails to negotiate.
+        try { peer.restartIce(); } catch { /* not supported */ }
+      }
+    };
     if (initiator) {
       void peer.createOffer().then(offer => peer.setLocalDescription(offer)).then(() => {
         if (peer.localDescription) sendSignal({ type: 'offer', to: peerId, sdp: peer.localDescription.toJSON() });
@@ -96,6 +129,7 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
   useEffect(() => {
     if (!enabled || !roomId || !userId) return;
     let cancelled = false;
+    setError(null);
     const roomChannel = supabase.channel(`deskflow-call-${roomId}`, { config: { broadcast: { self: false } } });
     channelRef.current = roomChannel;
     setConnectionState('connecting');
@@ -127,6 +161,13 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
     };
 
     roomChannel.on('broadcast', { event: 'signal' }, handleSignal).subscribe(async status => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        if (!cancelled) {
+          setConnectionState('failed');
+          setError('Could not connect to the call server. Check your network and try again.');
+        }
+        return;
+      }
       if (status !== 'SUBSCRIBED' || cancelled) return;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: modeRef.current === 'video', audio: true });
@@ -138,8 +179,16 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
         setLocalStream(stream);
         stream.getVideoTracks().forEach(track => { track.enabled = modeRef.current === 'video'; });
         sendSignal({ type: 'join', mode: modeRef.current });
-      } catch {
+      } catch (mediaError) {
+        const name = (mediaError as DOMException)?.name;
         setConnectionState('failed');
+        setError(
+          name === 'NotAllowedError'
+            ? 'Microphone/camera permission was blocked. Allow access in your browser and rejoin.'
+            : name === 'NotFoundError'
+              ? 'No microphone or camera was found on this device.'
+              : 'Could not access your microphone or camera.'
+        );
       }
     });
 
@@ -155,6 +204,7 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
       setRemoteStreams({});
       setParticipants([]);
       setConnectionState('idle');
+      setError(null);
     };
   }, [createPeer, enabled, removePeer, roomId, sendSignal, userId]);
 
@@ -186,5 +236,5 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
     videoTracks.forEach(track => { track.enabled = true; });
   }, []);
 
-  return { localStream, remoteStreams, participants, connectionState, setMicEnabled, setCameraEnabled };
+  return { localStream, remoteStreams, participants, connectionState, error, setMicEnabled, setCameraEnabled };
 }
