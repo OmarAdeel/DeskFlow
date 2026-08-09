@@ -27,33 +27,48 @@ const turnUrl = import.meta.env.VITE_TURN_URL as string | undefined;
 const turnUsername = import.meta.env.VITE_TURN_USERNAME as string | undefined;
 const turnCredential = import.meta.env.VITE_TURN_CREDENTIAL as string | undefined;
 
-const rtcConfig: RTCConfiguration = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun.cloudflare.com:3478' },
-    // Free public TURN relay so calls survive symmetric NAT/firewalls when no
-    // dedicated TURN is configured. Overridden by VITE_TURN_* when provided.
-    {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
-    ...(turnUrl
-      ? [{ urls: turnUrl, username: turnUsername, credential: turnCredential }]
-      : [])
-  ]
-};
+// Metered TURN REST endpoint. Credentials rotate, so we fetch fresh ICE servers
+// at runtime and fall back to the verified static list below if the fetch fails.
+const turnApiUrl = (import.meta.env.VITE_TURN_API_URL as string | undefined)
+  || 'https://deskflow.metered.live/api/v1/turn/credentials?apiKey=fb2efde53df7659a5a0d8dac52ddfc8cbb1a';
+
+const staticIceServers: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  { urls: 'turn:global.relay.metered.ca:80', username: 'a53cc33a1ee36cdad1ad9831', credential: 'DtENpV1nUXPtgBBb' },
+  { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: 'a53cc33a1ee36cdad1ad9831', credential: 'DtENpV1nUXPtgBBb' },
+  { urls: 'turn:global.relay.metered.ca:443', username: 'a53cc33a1ee36cdad1ad9831', credential: 'DtENpV1nUXPtgBBb' },
+  { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: 'a53cc33a1ee36cdad1ad9831', credential: 'DtENpV1nUXPtgBBb' },
+  ...(turnUrl ? [{ urls: turnUrl, username: turnUsername, credential: turnCredential }] : [])
+];
+
+// Mutable so the dynamic fetch can swap in fresh, rotated credentials.
+let currentIceServers: RTCIceServer[] = staticIceServers;
+
+const rtcConfig = (): RTCConfiguration => ({ iceServers: currentIceServers });
+
+// Fire-and-forget refresh of TURN credentials. Runs once on module load and is
+// re-triggered before each call so long-lived sessions keep valid credentials.
+let turnFetchPromise: Promise<void> | null = null;
+function refreshIceServers(): Promise<void> {
+  if (turnFetchPromise) return turnFetchPromise;
+  turnFetchPromise = fetch(turnApiUrl)
+    .then(res => (res.ok ? res.json() : Promise.reject(new Error(`TURN API ${res.status}`))))
+    .then((servers: RTCIceServer[]) => {
+      if (Array.isArray(servers) && servers.length > 0) currentIceServers = servers;
+    })
+    .catch(err => {
+      console.warn('TURN credential fetch failed, using static fallback', err);
+    })
+    .finally(() => {
+      turnFetchPromise = null;
+    });
+  return turnFetchPromise;
+}
+
+// Kick off an initial refresh at load so credentials are warm before the first call.
+void refreshIceServers();
 
 export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOptions) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -90,7 +105,7 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
   const createPeer = useCallback((peerId: string, initiator: boolean) => {
     const existing = peersRef.current[peerId];
     if (existing) return existing;
-    const peer = new RTCPeerConnection(rtcConfig);
+    const peer = new RTCPeerConnection(rtcConfig());
     peersRef.current[peerId] = peer;
     localStreamRef.current?.getTracks().forEach(track => peer.addTrack(track, localStreamRef.current as MediaStream));
     peer.onicecandidate = event => {
@@ -169,6 +184,9 @@ export function useWebRTCCall({ roomId, userId, mode, enabled }: UseWebRTCCallOp
         return;
       }
       if (status !== 'SUBSCRIBED' || cancelled) return;
+      // Make sure TURN credentials are fresh before we start negotiating.
+      await refreshIceServers();
+      if (cancelled) return;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: modeRef.current === 'video', audio: true });
         if (cancelled) {
