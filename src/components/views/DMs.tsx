@@ -455,7 +455,13 @@ export function DMsView({ userId }: { userId?: string }) {
     });
     inviteChannel.on('broadcast', { event: 'invite' }, () => undefined).subscribe(status => {
       if (status !== 'SUBSCRIBED') return;
-      const payload = { from: currentUser.id, roomCode, video: mode === 'video' };
+      const payload = {
+        from: currentUser.id,
+        fromName: currentUser.name,
+        fromAvatarUrl: currentUser.avatarUrl,
+        roomCode,
+        video: mode === 'video'
+      };
       [0, 800, 2000].forEach(delay => {
         window.setTimeout(() => {
           void inviteChannel.send({ type: 'broadcast', event: 'invite', payload });
