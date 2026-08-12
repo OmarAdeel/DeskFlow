@@ -2,10 +2,10 @@ import {
   Search, MessageSquare, Send, Phone, Video, MoreVertical, 
   Smile, Check, X, Bold, Italic, Strikethrough, Link as LinkIcon, 
   ListOrdered, List, AlignLeft, Code, SquareSlash, Plus, Type, 
-  AtSign, Hash, Lock, ChevronDown, CheckCircle2, Mic, MicOff, VideoOff, PhoneOff, MonitorUp, Volume2, ArrowLeft, Bot
+  AtSign, Hash, Lock, ChevronDown, CheckCircle2, Mic, MicOff, VideoOff, PhoneOff, MonitorUp, Volume2, ArrowLeft, Bot, FileText
 } from 'lucide-react';
 import React, { useState, useEffect, useRef } from 'react';
-import { canAccessChannel, useWorkspace } from '../../context';
+import { canAccessChannel, useWorkspace, MessageAttachment } from '../../context';
 import { supabase } from '../../lib/supabase';
 import { EmojiDeluxe } from '../EmojiDeluxe';
 import { FormattedMessage } from '../FormattedMessage';
@@ -32,6 +32,7 @@ interface DMMessage {
   isMe: boolean;
   reactions: string[];
   replies: DMReply[];
+  attachments?: MessageAttachment[];
 }
 
 export function DMsView({ userId }: { userId?: string }) {
@@ -135,6 +136,9 @@ export function DMsView({ userId }: { userId?: string }) {
 
   const [userSearch, setUserSearch] = useState('');
   const [dmText, setDmText] = useState('');
+  const [pendingAttachments, setPendingAttachments] = useState<MessageAttachment[]>([]);
+  const [previewAttachment, setPreviewAttachment] = useState<MessageAttachment | null>(null);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [threadReply, setThreadReply] = useState('');
   const [agentStatus, setAgentStatus] = useState<'searching' | 'thinking' | 'checking' | 'typing' | null>(null);
   const agentStatusTimerRef = useRef<number | null>(null);
@@ -416,6 +420,7 @@ export function DMsView({ userId }: { userId?: string }) {
   const [visibleRepliesCount, setVisibleRepliesCount] = useState<number>(5);
 
   const dmInputRef = useRef<HTMLTextAreaElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const threadInputRef = useRef<HTMLTextAreaElement>(null);
   const dmMessagesContainerRef = useRef<HTMLDivElement>(null);
   const dmThreadMessagesContainerRef = useRef<HTMLDivElement>(null);
@@ -814,6 +819,13 @@ export function DMsView({ userId }: { userId?: string }) {
     localStorage.setItem('demo_conversations', JSON.stringify(conversations));
   }, [conversations]);
 
+  const ensureDmMembership = async (conversationId: string, userId: string) => {
+    return supabase.from('conversation_members').upsert(
+      { conversation_id: conversationId, user_id: userId },
+      { onConflict: 'conversation_id,user_id', ignoreDuplicates: true }
+    );
+  };
+
   const getDmConversation = async (targetUserId: string, create = false): Promise<string | null> => {
     if (!currentUser?.id || !activeOrganizationId || !targetUserId || targetUserId === currentUser.id) return null;
 
@@ -836,18 +848,12 @@ export function DMsView({ userId }: { userId?: string }) {
       // Self-membership is always allowed by the workspace policy. Repair it
       // even while merely opening the DM, because the other account may have
       // created the conversation just before this lookup completed.
-      const { error: selfMembershipError } = await supabase.from('conversation_members').insert({
-        conversation_id: deterministicConversation.id,
-        user_id: currentUser.id
-      });
-      if (selfMembershipError && selfMembershipError.code !== '23505') throw selfMembershipError;
+      const { error: selfMembershipError } = await ensureDmMembership(deterministicConversation.id, currentUser.id);
+      if (selfMembershipError) throw selfMembershipError;
 
       if (create && deterministicConversation.created_by === currentUser.id) {
-        const { error: targetMembershipInsertError } = await supabase.from('conversation_members').insert({
-          conversation_id: deterministicConversation.id,
-          user_id: targetUserId
-        });
-        if (targetMembershipInsertError && targetMembershipInsertError.code !== '23505') throw targetMembershipInsertError;
+        const { error: targetMembershipInsertError } = await ensureDmMembership(deterministicConversation.id, targetUserId);
+        if (targetMembershipInsertError) throw targetMembershipInsertError;
       }
       return deterministicConversation.id;
     }
@@ -890,16 +896,13 @@ export function DMsView({ userId }: { userId?: string }) {
     // The creator can add both members. If the conversation already existed,
     // the other account may only add itself under RLS, so retry that narrower
     // insert instead of failing the entire DM send.
-    const { error: membersError } = await supabase.from('conversation_members').insert([
+    const { error: membersError } = await supabase.from('conversation_members').upsert([
       { conversation_id: conversationId, user_id: currentUser.id },
       { conversation_id: conversationId, user_id: targetUserId }
-    ]);
-    if (membersError && membersError.code !== '23505') {
-      const { error: selfMemberError } = await supabase.from('conversation_members').insert({
-        conversation_id: conversationId,
-        user_id: currentUser.id
-      });
-      if (selfMemberError && selfMemberError.code !== '23505') throw membersError;
+    ], { onConflict: 'conversation_id,user_id', ignoreDuplicates: true });
+    if (membersError) {
+      const { error: selfMemberError } = await ensureDmMembership(conversationId, currentUser.id);
+      if (selfMemberError) throw membersError;
     }
 
     // Confirm that this session is a member before trying to insert a message.
@@ -913,7 +916,7 @@ export function DMsView({ userId }: { userId?: string }) {
     return membership?.conversation_id || null;
   };
 
-  const toDmMessage = (row: { id: string; sender_id: string; content: string; created_at: string }, target: typeof systemUsers[0]): DMMessage => {
+  const toDmMessage = (row: { id: string; sender_id: string; content: string; created_at: string; attachments?: MessageAttachment[] | null }, target: typeof systemUsers[0]): DMMessage => {
     const isMe = row.sender_id === currentUser?.id;
     const sender = users.find(user => user.id === row.sender_id);
     return {
@@ -924,7 +927,8 @@ export function DMsView({ userId }: { userId?: string }) {
       timestamp: new Date(row.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       isMe,
       reactions: [],
-      replies: []
+      replies: [],
+      attachments: Array.isArray(row.attachments) ? row.attachments : []
     };
   };
 
@@ -955,7 +959,7 @@ export function DMsView({ userId }: { userId?: string }) {
 
       const { data: rows, error } = await supabase
         .from('messages')
-        .select('id,sender_id,content,created_at,parent_message_id')
+        .select('id,sender_id,content,created_at,parent_message_id,attachments')
         .eq('conversation_id', conversationId)
         .order('created_at', { ascending: true });
       if (error) throw error;
@@ -997,9 +1001,9 @@ export function DMsView({ userId }: { userId?: string }) {
     if (!dmConversationId || !currentUser?.id || selectedUser.isAgent) return;
     const realtimeChannel = supabase.channel(`deskflow-dm-${dmConversationId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${dmConversationId}` }, payload => {
-        const row = payload.new as { id?: string; sender_id?: string; content?: string; created_at?: string; parent_message_id?: string | null };
+        const row = payload.new as { id?: string; sender_id?: string; content?: string; created_at?: string; parent_message_id?: string | null; attachments?: MessageAttachment[] | null };
         if (!row.id || !row.sender_id || !row.created_at || row.sender_id === currentUser.id) return;
-        const incoming = toDmMessage({ id: row.id, sender_id: row.sender_id, content: String(row.content || ''), created_at: row.created_at }, selectedUser);
+        const incoming = toDmMessage({ id: row.id, sender_id: row.sender_id, content: String(row.content || ''), created_at: row.created_at, attachments: row.attachments }, selectedUser);
         setRemoteDmMessages(previous => {
           if (row.parent_message_id) {
             return previous.map(message => message.id === row.parent_message_id
@@ -1014,7 +1018,45 @@ export function DMsView({ userId }: { userId?: string }) {
   }, [dmConversationId, currentUser?.id, selectedUser.id]);
 
 
-  const persistDmMessage = async (target: typeof systemUsers[0], text: string, parentMessageId?: string): Promise<DMMessage | null> => {
+  const attachmentIsAllowed = (file: File) => file.type.startsWith('image/') || file.type.startsWith('video/') || file.type === 'application/pdf';
+
+  const addAttachmentFiles = (files: File[]) => {
+    const allowed = files.filter(attachmentIsAllowed);
+    const available = Math.max(0, 10 - pendingAttachments.length);
+    Promise.all(allowed.slice(0, available).map(file => new Promise<MessageAttachment>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve({ id: `${file.name}-${file.lastModified}-${Math.random()}`, name: file.name, type: file.type, size: file.size, dataUrl: String(reader.result) });
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    }))).then(attachments => setPendingAttachments(previous => [...previous, ...attachments])).catch(() => undefined);
+  };
+
+  const handleAttachmentSelection = (event: React.ChangeEvent<HTMLInputElement>) => {
+    addAttachmentFiles(Array.from(event.target.files || []) as File[]);
+    event.target.value = '';
+  };
+
+  const handleComposerPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.files || []) as File[];
+    if (files.some(attachmentIsAllowed)) {
+      event.preventDefault();
+      addAttachmentFiles(files);
+    }
+  };
+
+  const renderAttachments = (attachments?: MessageAttachment[]) => attachments?.length ? (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {attachments.map(attachment => attachment.type.startsWith('image/') ? (
+        <button key={attachment.id} type="button" onClick={() => setPreviewAttachment(attachment)} className="max-w-xs overflow-hidden rounded-lg border border-gray-800 text-left hover:border-blue-500"><img src={attachment.dataUrl} alt={attachment.name} className="max-h-48 max-w-full object-contain" /><span className="block truncate bg-gray-900 px-2 py-1 text-[10px] text-gray-400">{attachment.name}</span></button>
+      ) : attachment.type.startsWith('video/') ? (
+        <button key={attachment.id} type="button" onClick={() => setPreviewAttachment(attachment)} className="rounded-lg border border-gray-800 bg-gray-900 p-2 text-left hover:border-blue-500"><Video className="h-5 w-5 text-blue-400" /><span className="ml-2 text-[10px] text-gray-300">{attachment.name}</span></button>
+      ) : (
+        <button key={attachment.id} type="button" onClick={() => setPreviewAttachment(attachment)} className="flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900 p-2 text-left hover:border-blue-500"><FileText className="h-5 w-5 text-red-400" /><span className="text-[10px] text-gray-300">{attachment.name}</span></button>
+      ))}
+    </div>
+  ) : null;
+
+  const persistDmMessage = async (target: typeof systemUsers[0], text: string, parentMessageId?: string, attachments: MessageAttachment[] = []): Promise<DMMessage | null> => {
     if (!currentUser?.id || !activeOrganizationId || target.isAgent) return null;
     const conversationId = await getDmConversation(target.id, true);
     if (!conversationId) return null;
@@ -1025,8 +1067,9 @@ export function DMsView({ userId }: { userId?: string }) {
       conversation_id: conversationId,
       sender_id: currentUser.id,
       parent_message_id: parentMessageId || null,
-      content: text
-    }).select('id,sender_id,content,created_at').single();
+      content: text,
+      attachments
+    }).select('id,sender_id,content,created_at,attachments').single();
     if (error) throw error;
     setDmConversationId(conversationId);
     setRemoteDmLoaded(true);
@@ -1284,8 +1327,9 @@ export function DMsView({ userId }: { userId?: string }) {
 
   const handleSendMessage = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!dmText.trim()) return;
+    if (!dmText.trim() && pendingAttachments.length === 0) return;
     const outgoingText = dmText.trim();
+    const outgoingAttachments = pendingAttachments;
 
     const newMsg: DMMessage = {
       id: `new_dm_${Date.now()}`,
@@ -1295,7 +1339,8 @@ export function DMsView({ userId }: { userId?: string }) {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       isMe: true,
       reactions: [],
-      replies: []
+      replies: [],
+      attachments: outgoingAttachments
     };
 
     if (selectedUser.isAgent) {
@@ -1305,7 +1350,7 @@ export function DMsView({ userId }: { userId?: string }) {
       }));
       respondAsAgent(selectedUser, outgoingText);
     } else {
-      void persistDmMessage(selectedUser, outgoingText).then(savedMessage => {
+      void persistDmMessage(selectedUser, outgoingText, undefined, outgoingAttachments).then(savedMessage => {
         if (!savedMessage) return;
         setRemoteDmMessages(previous => previous.some(message => message.id === savedMessage.id) ? previous : [...previous, savedMessage]);
       }).catch(error => {
@@ -1316,6 +1361,7 @@ export function DMsView({ userId }: { userId?: string }) {
 
     // Clear typing and draft
     setDmText('');
+    setPendingAttachments([]);
     setDmDrafts(prev => ({ ...prev, [selectedUser.id]: '' }));
     setShowMainEmojiPicker(false);
   };
@@ -1404,9 +1450,20 @@ export function DMsView({ userId }: { userId?: string }) {
     });
   };
 
+  const attachmentPreview = previewAttachment && (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 p-4" role="dialog" aria-modal="true" onClick={() => setPreviewAttachment(null)}>
+      <div className="relative max-h-[90vh] max-w-[95vw] overflow-hidden rounded-xl border border-gray-700 bg-[#121317] p-4" onClick={event => event.stopPropagation()}>
+        <button type="button" onClick={() => setPreviewAttachment(null)} className="absolute right-2 top-2 rounded-md bg-black/60 p-1 text-gray-300"><X className="h-4 w-4" /></button>
+        {previewAttachment.type.startsWith('image/') ? <img src={previewAttachment.dataUrl} alt={previewAttachment.name} className="max-h-[80vh] max-w-full object-contain" /> : previewAttachment.type.startsWith('video/') ? <video controls autoPlay src={previewAttachment.dataUrl} className="max-h-[80vh] max-w-full" /> : <iframe title={previewAttachment.name} src={previewAttachment.dataUrl} className="h-[80vh] w-[min(900px,85vw)] bg-white" />}
+      </div>
+    </div>
+  );
+
   return (
     <div className="flex-1 bg-[#1A1D21] flex h-full text-gray-300 w-full relative overflow-hidden select-none">
       
+      {attachmentPreview}
+
       {/* 1. Left User Selection List Panel */}
       <div className={`w-full md:w-[300px] border-r border-gray-800 flex-col bg-[#121317] shrink-0 ${mobileShowChat ? 'hidden md:flex' : 'flex'}`}>
         <div className="p-4 border-b border-gray-800">
@@ -1553,6 +1610,7 @@ export function DMsView({ userId }: { userId?: string }) {
 
                   <div className={`mt-1 text-xs text-gray-300 leading-relaxed font-sans`}>
                     <FormattedMessage text={msg.text} />
+                    {renderAttachments(msg.attachments)}
                   </div>
 
                   {/* Render Reactions */}
@@ -1717,24 +1775,41 @@ export function DMsView({ userId }: { userId?: string }) {
 
             {/* textarea editing */}
             <form onSubmit={handleSendMessage} className="flex flex-col">
+              {pendingAttachments.length > 0 && (
+                <div className="flex flex-wrap gap-2 border-b border-gray-800 px-3 pt-3">
+                  {pendingAttachments.map(attachment => (
+                    <div key={attachment.id} className="relative flex items-center gap-2 rounded-md border border-gray-700 bg-gray-900 px-2 py-1.5 text-[10px] text-gray-300">
+                      {attachment.type.startsWith('image/') ? <img src={attachment.dataUrl} alt="" className="h-8 w-8 rounded object-cover" /> : <FileText className="h-4 w-4 text-red-400" />}
+                      <span className="max-w-[150px] truncate">{attachment.name}</span>
+                      <button type="button" onClick={() => setPendingAttachments(previous => previous.filter(item => item.id !== attachment.id))} className="text-gray-500 hover:text-white" aria-label={`Remove ${attachment.name}`}><X className="h-3.5 w-3.5" /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <textarea 
                 ref={dmInputRef}
                 placeholder={`Message ${selectedUser.name}...`}
                 value={dmText}
                 onChange={handleDmTextChangeCursor}
+                onPaste={handleComposerPaste}
+                onDragEnter={(event) => { event.preventDefault(); setIsDraggingFiles(true); }}
+                onDragOver={(event) => event.preventDefault()}
+                onDragLeave={() => setIsDraggingFiles(false)}
+                onDrop={(event) => { event.preventDefault(); setIsDraggingFiles(false); addAttachmentFiles(Array.from(event.dataTransfer.files) as File[]); }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     handleSendMessage();
                   }
                 }}
-                className="bg-transparent text-gray-200 px-4 py-3 min-h-[60px] max-h-32 resize-none focus:outline-none focus:ring-0 text-xs leading-relaxed"
+                className={`bg-transparent text-gray-200 px-4 py-3 min-h-[60px] max-h-32 resize-none focus:outline-none focus:ring-0 text-xs leading-relaxed ${isDraggingFiles ? 'ring-2 ring-blue-500/70 bg-blue-500/10' : ''}`}
                 rows={2}
               ></textarea>
               
               <div className="flex justify-between items-center px-3 pb-2 border-t border-gray-800 pt-2 bg-[#1A1D21]">
                 <div className="flex items-center space-x-1.5 relative">
-                  <button type="button" className="flex items-center justify-center h-6 w-6 rounded-full bg-gray-750 text-gray-300 hover:bg-gray-700 hover:text-white transition"><Plus className="h-3.5 w-3.5" /></button>
+                  <button type="button" onClick={() => attachmentInputRef.current?.click()} className="flex items-center justify-center h-6 w-6 rounded-full bg-gray-750 text-gray-300 hover:bg-gray-700 hover:text-white transition" title="Attach images, videos, or PDFs"><Plus className="h-3.5 w-3.5" /></button>
+                  <input ref={attachmentInputRef} type="file" accept="image/*,video/*,application/pdf" multiple className="hidden" onChange={handleAttachmentSelection} />
                   <button type="button" className="p-1 text-gray-400 hover:text-gray-200 rounded hover:bg-gray-850"><Type className="h-3.5 w-3.5" /></button>
                   
                   {/* Emoji deluxe popup */}
@@ -1775,7 +1850,7 @@ export function DMsView({ userId }: { userId?: string }) {
 
                 <button 
                   type="submit"
-                  disabled={!dmText.trim()}
+                  disabled={!dmText.trim() && pendingAttachments.length === 0}
                   className="bg-emerald-600 hover:bg-emerald-500 text-[#121317] disabled:bg-gray-800 disabled:text-gray-500 disabled:opacity-50 hover:shadow-lg p-1.5 px-3 rounded-md transition font-semibold text-[11px] flex items-center justify-center space-x-1 cursor-pointer"
                 >
                   <span>Send</span>
