@@ -138,6 +138,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
   
   const [newMessage, setNewMessage] = useState(draft?.text || '');
   const [pendingAttachments, setPendingAttachments] = useState<MessageAttachment[]>([]);
+  const [previewAttachment, setPreviewAttachment] = useState<MessageAttachment | null>(null);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [highlightedThreadItemId, setHighlightedThreadItemId] = useState<string | null>(null);
   const [threadReply, setThreadReply] = useState('');
@@ -1390,11 +1391,11 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
   const renderAttachments = (attachments?: MessageAttachment[]) => attachments?.length ? (
     <div className="mt-2.5 flex flex-wrap gap-2">
       {attachments.map(attachment => attachment.type.startsWith('image/') ? (
-        <a key={attachment.id} href={attachment.dataUrl} target="_blank" rel="noreferrer" className="block max-w-sm overflow-hidden rounded-lg border border-gray-800 hover:border-blue-500"><img src={attachment.dataUrl} alt={attachment.name} className="max-h-64 max-w-full object-contain" /><span className="block truncate bg-gray-900 px-2 py-1 text-[10px] text-gray-400">{attachment.name}</span></a>
+        <button key={attachment.id} type="button" onClick={() => setPreviewAttachment(attachment)} className="block max-w-sm overflow-hidden rounded-lg border border-gray-800 text-left hover:border-blue-500" title={`Preview ${attachment.name}`}><img src={attachment.dataUrl} alt={attachment.name} className="max-h-64 max-w-full object-contain" /><span className="block truncate bg-gray-900 px-2 py-1 text-[10px] text-gray-400">{attachment.name}</span></button>
       ) : attachment.type.startsWith('video/') ? (
-        <div key={attachment.id} className="max-w-sm overflow-hidden rounded-lg border border-gray-800 bg-gray-900"><video controls src={attachment.dataUrl} className="max-h-64 max-w-full" /><p className="truncate px-2 py-1 text-[10px] text-gray-400">{attachment.name} • {formatAttachmentSize(attachment.size)}</p></div>
+        <button key={attachment.id} type="button" onClick={() => setPreviewAttachment(attachment)} className="max-w-sm overflow-hidden rounded-lg border border-gray-800 bg-gray-900 text-left hover:border-blue-500" title={`Preview ${attachment.name}`}><video muted preload="metadata" src={attachment.dataUrl} className="max-h-64 max-w-full" /><p className="truncate px-2 py-1 text-[10px] text-gray-400">{attachment.name} • {formatAttachmentSize(attachment.size)}</p></button>
       ) : (
-        <a key={attachment.id} href={attachment.dataUrl} download={attachment.name} className="flex max-w-sm items-center gap-3 rounded-lg border border-gray-800 bg-gray-900 p-3 hover:border-blue-500"><FileText className="h-5 w-5 shrink-0 text-red-400" /><span className="min-w-0"><span className="block truncate text-xs font-semibold text-gray-200">{attachment.name}</span><span className="text-[10px] text-gray-500">PDF • {formatAttachmentSize(attachment.size)}</span></span></a>
+        <button key={attachment.id} type="button" onClick={() => setPreviewAttachment(attachment)} className="flex max-w-sm items-center gap-3 rounded-lg border border-gray-800 bg-gray-900 p-3 text-left hover:border-blue-500" title={`Preview ${attachment.name}`}><FileText className="h-5 w-5 shrink-0 text-red-400" /><span className="min-w-0"><span className="block truncate text-xs font-semibold text-gray-200">{attachment.name}</span><span className="text-[10px] text-gray-500">PDF • {formatAttachmentSize(attachment.size)}</span></span></button>
       ))}
     </div>
   ) : null;
@@ -1402,6 +1403,21 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
   if (!channel) {
     return <div className="p-8 text-gray-500">Channel not found</div>;
   }
+
+  const attachmentPreview = previewAttachment && (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label={`Preview ${previewAttachment.name}`} onClick={() => setPreviewAttachment(null)}>
+      <div className="relative flex max-h-[90vh] max-w-[min(1100px,95vw)] flex-col overflow-hidden rounded-xl border border-gray-700 bg-[#121317] shadow-2xl" onClick={event => event.stopPropagation()}>
+        <div className="flex items-center justify-between gap-4 border-b border-gray-800 px-4 py-3">
+          <div className="min-w-0"><p className="truncate text-sm font-semibold text-gray-200">{previewAttachment.name}</p><p className="text-[10px] text-gray-500">{previewAttachment.type === 'application/pdf' ? 'PDF document' : previewAttachment.type.startsWith('video/') ? 'Video' : 'Image'} • {formatAttachmentSize(previewAttachment.size)}</p></div>
+          <button type="button" onClick={() => setPreviewAttachment(null)} className="rounded-md p-1.5 text-gray-400 hover:bg-gray-800 hover:text-white" aria-label="Close preview"><X className="h-5 w-5" /></button>
+        </div>
+        <div className="flex min-h-0 items-center justify-center overflow-auto bg-black/40 p-4">
+          {previewAttachment.type.startsWith('image/') ? <img src={previewAttachment.dataUrl} alt={previewAttachment.name} className="max-h-[70vh] max-w-full object-contain" /> : previewAttachment.type.startsWith('video/') ? <video controls autoPlay src={previewAttachment.dataUrl} className="max-h-[70vh] max-w-full" /> : <iframe title={previewAttachment.name} src={previewAttachment.dataUrl} className="h-[70vh] w-[min(900px,85vw)] bg-white" />}
+        </div>
+        <div className="flex justify-end border-t border-gray-800 px-4 py-2"><a href={previewAttachment.dataUrl} download={previewAttachment.name} onClick={event => event.stopPropagation()} className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-500">Download</a></div>
+      </div>
+    </div>
+  );
 
   if (!canAccessChannel(channel, currentUser, activeOrganizationId)) {
     return (
@@ -1417,7 +1433,9 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
   }
 
   return (
-    <div className="flex h-full bg-[#1A1D21] text-gray-300 w-full relative">
+    <>
+      {attachmentPreview}
+      <div className="flex h-full bg-[#1A1D21] text-gray-300 w-full relative">
       {/* Main Channel Area */}
       <div className={`flex flex-col h-full bg-[#1A1D21] transition-all duration-300 ${activeThreadId ? 'md:pr-[400px]' : ''} w-full`}>
         
@@ -3178,5 +3196,6 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
         </div>
       )}
     </div>
+    </>
   );
 }
