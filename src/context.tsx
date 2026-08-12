@@ -93,6 +93,14 @@ export interface WorkspaceAgent {
   createdAt: number;
 }
 
+export interface MessageAttachment {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  dataUrl: string;
+}
+
 export interface Reply {
   id: string;
   senderId: string;
@@ -100,6 +108,7 @@ export interface Reply {
   timestamp: number;
   isRead: boolean;
   reactions?: string[];
+  attachments?: MessageAttachment[];
 }
 
 export interface Message {
@@ -111,6 +120,7 @@ export interface Message {
   isRead: boolean;
   replies: Reply[];
   reactions?: string[];
+  attachments?: MessageAttachment[];
 }
 
 export interface Draft {
@@ -680,7 +690,8 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
     for (const row of messageRows.filter((message: any) => message.parent_message_id) as any[]) {
       addReply(row.parent_message_id, {
         id: row.id, senderId: row.sender_id, text: row.content, timestamp: new Date(row.created_at).getTime(), isRead: true,
-        reactions: reactionRows.filter((reaction: any) => reaction.message_id === row.id).map((reaction: any) => reaction.emoji)
+        reactions: reactionRows.filter((reaction: any) => reaction.message_id === row.id).map((reaction: any) => reaction.emoji),
+        attachments: Array.isArray(row.attachments) ? row.attachments : []
       });
     }
     for (const row of agentMessageRows as any[]) {
@@ -694,7 +705,8 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       ...(messageRows as any[]).filter(row => !row.parent_message_id && row.channel_id).map(row => ({
         id: row.id, channelId: row.channel_id, senderId: row.sender_id, text: row.content,
         timestamp: new Date(row.created_at).getTime(), isRead: true, replies: replies.get(row.id) || [],
-        reactions: reactionRows.filter((reaction: any) => reaction.message_id === row.id).map((reaction: any) => reaction.emoji)
+        reactions: reactionRows.filter((reaction: any) => reaction.message_id === row.id).map((reaction: any) => reaction.emoji),
+        attachments: Array.isArray(row.attachments) ? row.attachments : []
       })),
       ...(agentMessageRows as any[]).filter(row => !row.parent_message_id && row.channel_id).map(row => ({
         id: row.id, channelId: row.channel_id, senderId: row.agent_id, text: row.content,
@@ -990,8 +1002,8 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
 
   const persistMessageChanges = async (previous: Message[], next: Message[], userId: string) => {
     const flatten = (items: Message[]) => items.flatMap(message => [
-      { id: message.id, channelId: message.channelId, senderId: message.senderId, text: message.text, timestamp: message.timestamp, parentId: null as string | null, reactions: message.reactions || [] },
-      ...message.replies.map(reply => ({ id: reply.id, channelId: message.channelId, senderId: reply.senderId, text: reply.text, timestamp: reply.timestamp, parentId: message.id, reactions: reply.reactions || [] }))
+      { id: message.id, channelId: message.channelId, senderId: message.senderId, text: message.text, timestamp: message.timestamp, parentId: null as string | null, reactions: message.reactions || [], attachments: message.attachments || [] },
+      ...message.replies.map(reply => ({ id: reply.id, channelId: message.channelId, senderId: reply.senderId, text: reply.text, timestamp: reply.timestamp, parentId: message.id, reactions: reply.reactions || [], attachments: reply.attachments || [] }))
     ]);
     const before = new Map(flatten(previous).map(row => [row.id, row]));
     const nextRows = flatten(next).filter(row => !deletedMessageIdsRef.current.has(row.id));
@@ -1000,7 +1012,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       const previousRow = before.get(row.id);
       if (previousRow) {
         const changedByOwner = row.senderId === userId
-          && (previousRow.text !== row.text || previousRow.channelId !== row.channelId || previousRow.parentId !== row.parentId || previousRow.timestamp !== row.timestamp);
+          && (previousRow.text !== row.text || previousRow.channelId !== row.channelId || previousRow.parentId !== row.parentId || previousRow.timestamp !== row.timestamp || JSON.stringify(previousRow.attachments) !== JSON.stringify(row.attachments));
         const agentTextChanged = agentIds.has(row.senderId) && previousRow.text !== row.text;
         return changedByOwner || agentTextChanged;
       }
@@ -1046,6 +1058,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
           sender_id: row.senderId,
           parent_message_id: row.parentId,
           content: row.text,
+          attachments: row.attachments || [],
           created_at: timestamp.toISOString(),
           updated_at: new Date().toISOString()
         }];

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { canAccessChannel, useWorkspace } from '../../context';
+import { canAccessChannel, useWorkspace, MessageAttachment } from '../../context';
 import { 
   Hash, Lock, Send, MessageSquare, X, Bold, Italic, Underline, Strikethrough, 
   Link as LinkIcon, ListOrdered, List, AlignLeft, Code, SquareSlash, Plus, 
@@ -137,6 +137,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
   const draft = drafts.find(d => d.channelId === channelId);
   
   const [newMessage, setNewMessage] = useState(draft?.text || '');
+  const [pendingAttachments, setPendingAttachments] = useState<MessageAttachment[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [highlightedThreadItemId, setHighlightedThreadItemId] = useState<string | null>(null);
   const [threadReply, setThreadReply] = useState('');
@@ -389,6 +390,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
   }, [isRecordingVideo]);
   
   const channelInputRef = useRef<HTMLTextAreaElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const threadInputRef = useRef<HTMLTextAreaElement>(null);
   const channelMessagesContainerRef = useRef<HTMLDivElement>(null);
   const threadMessagesContainerRef = useRef<HTMLDivElement>(null);
@@ -1150,7 +1152,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
 
   const sendMessage = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || !currentUser) return;
+    if ((!newMessage.trim() && pendingAttachments.length === 0) || !currentUser) return;
     const outgoingText = newMessage.trim();
 
     const message = {
@@ -1160,13 +1162,15 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
       text: newMessage,
       timestamp: Date.now(),
       isRead: true,
-      replies: []
+      replies: [],
+      attachments: pendingAttachments
     };
 
     setMessages(previous => [...previous, message]);
     const mentionedAgent = !channel?.isPrivate && agents.find(agent => agent.enabled && containsAgentMention(outgoingText, agent.username));
     if (mentionedAgent) respondToPublicMention(outgoingText, mentionedAgent);
     setNewMessage('');
+    setPendingAttachments([]);
     setDrafts(drafts.filter(d => d.channelId !== channelId));
   };
 
@@ -1369,9 +1373,31 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
     }
   };
 
-  const handleCreateDocumentAttachment = () => {
-    setNewMessage(prev => prev + ` \n📄 [Document Attachment: whitepaper_draft.pdf] `);
+  const handleAttachmentSelection = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []) as File[];
+    const allowed = files.filter(file => file.type.startsWith('image/') || file.type.startsWith('video/') || file.type === 'application/pdf');
+    const available = Math.max(0, 10 - pendingAttachments.length);
+    Promise.all(allowed.slice(0, available).map(file => new Promise<MessageAttachment>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve({ id: `${file.name}-${file.lastModified}-${Math.random()}`, name: file.name, type: file.type, size: file.size, dataUrl: String(reader.result) });
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    }))).then(attachments => setPendingAttachments(previous => [...previous, ...attachments])).catch(() => undefined);
+    event.target.value = '';
   };
+
+  const formatAttachmentSize = (bytes: number) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  const renderAttachments = (attachments?: MessageAttachment[]) => attachments?.length ? (
+    <div className="mt-2.5 flex flex-wrap gap-2">
+      {attachments.map(attachment => attachment.type.startsWith('image/') ? (
+        <a key={attachment.id} href={attachment.dataUrl} target="_blank" rel="noreferrer" className="block max-w-sm overflow-hidden rounded-lg border border-gray-800 hover:border-blue-500"><img src={attachment.dataUrl} alt={attachment.name} className="max-h-64 max-w-full object-contain" /><span className="block truncate bg-gray-900 px-2 py-1 text-[10px] text-gray-400">{attachment.name}</span></a>
+      ) : attachment.type.startsWith('video/') ? (
+        <div key={attachment.id} className="max-w-sm overflow-hidden rounded-lg border border-gray-800 bg-gray-900"><video controls src={attachment.dataUrl} className="max-h-64 max-w-full" /><p className="truncate px-2 py-1 text-[10px] text-gray-400">{attachment.name} • {formatAttachmentSize(attachment.size)}</p></div>
+      ) : (
+        <a key={attachment.id} href={attachment.dataUrl} download={attachment.name} className="flex max-w-sm items-center gap-3 rounded-lg border border-gray-800 bg-gray-900 p-3 hover:border-blue-500"><FileText className="h-5 w-5 shrink-0 text-red-400" /><span className="min-w-0"><span className="block truncate text-xs font-semibold text-gray-200">{attachment.name}</span><span className="text-[10px] text-gray-500">PDF • {formatAttachmentSize(attachment.size)}</span></span></a>
+      ))}
+    </div>
+  ) : null;
 
   if (!channel) {
     return <div className="p-8 text-gray-500">Channel not found</div>;
@@ -1756,6 +1782,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
                           <div className="text-gray-305 text-[14px] leading-relaxed break-words">
                             <FormattedMessage text={msg.text} />
                           </div>
+                          {renderAttachments(msg.attachments)}
 
                           {/* Dynamic Custom Interactive Players for Recorded audio/video attachments */}
                           {isVoiceNote && (
@@ -1987,6 +2014,17 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
           )}
           
           <form onSubmit={sendMessage} className="flex flex-col">
+            {pendingAttachments.length > 0 && (
+              <div className="flex flex-wrap gap-2 border-b border-gray-800 px-3 pt-3">
+                {pendingAttachments.map(attachment => (
+                  <div key={attachment.id} className="relative flex items-center gap-2 rounded-md border border-gray-700 bg-gray-900 px-2 py-1.5 text-[10px] text-gray-300">
+                    {attachment.type.startsWith('image/') ? <img src={attachment.dataUrl} alt="" className="h-8 w-8 rounded object-cover" /> : <FileText className="h-4 w-4 text-red-400" />}
+                    <span className="max-w-[150px] truncate">{attachment.name}</span>
+                    <button type="button" onClick={() => setPendingAttachments(previous => previous.filter(item => item.id !== attachment.id))} className="text-gray-500 hover:text-white" aria-label={`Remove ${attachment.name}`}><X className="h-3.5 w-3.5" /></button>
+                  </div>
+                ))}
+              </div>
+            )}
             <textarea 
               ref={channelInputRef}
               value={newMessage}
@@ -1994,7 +2032,7 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
-                  if (newMessage.trim()) {
+                  if (newMessage.trim() || pendingAttachments.length > 0) {
                     sendMessage(e as any);
                   }
                 }
@@ -2012,12 +2050,13 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
                 <div className="relative group">
                   <button 
                     type="button" 
-                    onClick={handleCreateDocumentAttachment}
+                    onClick={() => attachmentInputRef.current?.click()}
                     className="flex items-center justify-center h-7 w-7 rounded-full bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white transition cursor-pointer"
-                    title="Add computer files"
+                    title="Attach images, videos, or PDFs"
                   >
                     <Plus className="h-4 w-4" />
                   </button>
+                  <input ref={attachmentInputRef} type="file" accept="image/*,video/*,application/pdf" multiple className="hidden" onChange={handleAttachmentSelection} />
                 </div>
 
                 {/* Aa Toggle button row */}
