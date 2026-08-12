@@ -167,7 +167,10 @@ const defaultCanvasCards: CanvasCard[] = [
   }
 ];
 
-export function CanvasView() {
+export function CanvasView({ deepLink, onNavigate }: {
+  deepLink?: { canvasId?: string; taskId?: string } | null;
+  onNavigate?: (view: any, channelId?: string, options?: { canvasId?: string; taskId?: string }) => void;
+}) {
   const { channels, users, currentUser, activeOrganizationId } = useWorkspace();
   const visibleChannels = channels.filter(channel => canAccessChannel(channel, currentUser, activeOrganizationId));
   const [cards, setCards] = useState<CanvasCard[]>([]);
@@ -194,6 +197,13 @@ export function CanvasView() {
   const [isEditingDoc, setIsEditingDoc] = useState(false);
   const [replyingToCommentId, setReplyingToCommentId] = useState<string | null>(null);
   const [replyInputs, setReplyInputs] = useState<{ [commentId: string]: string }>({});
+
+  React.useEffect(() => {
+    if (!deepLink || !cards.length || (activeTaskDiscussion && activeTaskDiscussion.card.id === deepLink.canvasId && activeTaskDiscussion.task.id === deepLink.taskId)) return;
+    const card = deepLink.canvasId ? cards.find(item => item.id === deepLink.canvasId) : undefined;
+    const task = card && deepLink.taskId ? card.items.find(item => item.id === deepLink.taskId) : undefined;
+    if (card && task) handleOpenDiscussion(card, task);
+  }, [cards, deepLink?.canvasId, deepLink?.taskId]);
 
   const getCommentsTotal = (discussions?: CanvasTaskComment[]) => {
     if (!discussions) return 0;
@@ -392,6 +402,7 @@ export function CanvasView() {
   };
 
   const handleOpenDiscussion = (card: CanvasCard, task: CanvasItem) => {
+    onNavigate?.('canvas', undefined, { canvasId: card.id, taskId: task.id });
     setActiveTaskDiscussion({ card, task });
     setEditingDoc(task.documentation || '');
     setIsEditingDoc(false);

@@ -1833,7 +1833,10 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
                           {(msg.replies.length > 0) && (
                             <div 
                               className="mt-2 text-xs flex items-center text-blue-400 hover:underline cursor-pointer bg-blue-950/20 px-2 py-1 rounded inline-flex border border-blue-900/10"
-                              onClick={() => setActiveThreadId(msg.id)}
+                              onClick={() => {
+                                setActiveThreadId(msg.id);
+                                onNavigate('channel', channelId, { messageId: msg.id });
+                              }}
                             >
                               <div className="flex -space-x-1.5 mr-2 shrink-0">
                                 {msg.replies.slice(0, 3).map((r, i) => {
@@ -1854,7 +1857,10 @@ export function ChannelView({ channelId, onNavigate }: { channelId: string, onNa
                             </div>
                           )}
                           
-                          <MessageActions itemId={msg.id} onReply={() => setActiveThreadId(msg.id)} />
+                          <MessageActions itemId={msg.id} onReply={() => {
+                            setActiveThreadId(msg.id);
+                            onNavigate('channel', channelId, { messageId: msg.id });
+                          }} />
                         </div>
                       </div>
                     );

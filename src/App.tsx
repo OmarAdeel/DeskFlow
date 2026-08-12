@@ -50,8 +50,26 @@ export default function App() {
     dmUnreadByUserId
   } = useWorkspace();
 
-  const [currentView, setCurrentView] = useState<ViewType>('unreads');
-  const [currentChannelId, setCurrentChannelId] = useState<string>('4');
+  const readUrlState = () => {
+    const params = new URLSearchParams(window.location.search);
+    return {
+      view: (params.get('view') as ViewType) || 'unreads',
+      selectionId: params.get('channelId') || params.get('userId') || '',
+      messageId: params.get('messageId'),
+      replyId: params.get('replyId'),
+      canvasId: params.get('canvasId'),
+      taskId: params.get('taskId')
+    };
+  };
+  const initialUrlState = readUrlState();
+  const [currentView, setCurrentView] = useState<ViewType>(initialUrlState.view);
+  const [currentChannelId, setCurrentChannelId] = useState<string>(initialUrlState.selectionId || '4');
+  const [deepLinkMessage, setDeepLinkMessage] = useState<{ messageId: string; replyId?: string } | null>(
+    initialUrlState.messageId ? { messageId: initialUrlState.messageId, replyId: initialUrlState.replyId || undefined } : null
+  );
+  const [deepLinkCanvas, setDeepLinkCanvas] = useState<{ canvasId?: string; taskId?: string } | null>(
+    initialUrlState.canvasId || initialUrlState.taskId ? { canvasId: initialUrlState.canvasId || undefined, taskId: initialUrlState.taskId || undefined } : null
+  );
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [isResizing, setIsResizing] = useState(false);
   const [isNewMessageModalOpen, setIsNewMessageModalOpen] = useState(false);
@@ -114,25 +132,21 @@ export default function App() {
   }, [activeOrganizationId, channels, users, currentUser, currentView, currentChannelId]);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const view = params.get('view') as ViewType;
-    const channelId = params.get('channelId') || params.get('userId');
-    const messageId = params.get('messageId');
-    const replyId = params.get('replyId');
-    if (view) {
-      setCurrentView(view);
-    }
-    if (channelId) {
-      setCurrentChannelId(channelId);
-    }
-    if (messageId) {
-      setTimeout(() => {
-        const threadEvent = new CustomEvent('open-thread', {
-          detail: { messageId, replyId }
-        });
-        window.dispatchEvent(threadEvent);
-      }, 300);
-    }
+    const openDeepLink = () => {
+      const next = readUrlState();
+      setCurrentView(next.view);
+      if (next.selectionId) setCurrentChannelId(next.selectionId);
+      setDeepLinkMessage(next.messageId ? { messageId: next.messageId, replyId: next.replyId || undefined } : null);
+      setDeepLinkCanvas(next.canvasId || next.taskId ? { canvasId: next.canvasId || undefined, taskId: next.taskId || undefined } : null);
+      if (next.messageId) {
+        window.setTimeout(() => window.dispatchEvent(new CustomEvent('open-thread', {
+          detail: { messageId: next.messageId, replyId: next.replyId }
+        })), 300);
+      }
+    };
+    openDeepLink();
+    window.addEventListener('popstate', openDeepLink);
+    return () => window.removeEventListener('popstate', openDeepLink);
   }, []);
 
   useEffect(() => {
@@ -152,12 +166,11 @@ export default function App() {
     const handleNav = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail) {
-        if (detail.channelId) {
-          setCurrentChannelId(detail.channelId);
-        }
-        if (detail.view) {
-          setCurrentView(detail.view as ViewType);
-        }
+        navigateToView(detail.view as ViewType, detail.channelId, {
+          messageId: detail.messageId,
+          replyId: detail.replyId,
+          replace: false
+        });
         if (detail.messageId) {
           setTimeout(() => {
             const threadEvent = new CustomEvent('open-thread', {
@@ -184,7 +197,7 @@ export default function App() {
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  const navigateToView = (view: ViewType, channelId?: string) => {
+  const navigateToView = (view: ViewType, channelId?: string, options?: { messageId?: string; replyId?: string; canvasId?: string; taskId?: string; replace?: boolean }) => {
     if (view === 'dms' && !channelId) {
       const fallbackDm = users.find(user =>
         user.id !== currentUser?.id && (!activeOrganizationId || user.organizationIds?.includes(activeOrganizationId))
@@ -194,6 +207,19 @@ export default function App() {
       setCurrentChannelId(channelId);
     }
     setCurrentView(view);
+    setDeepLinkMessage(options?.messageId ? { messageId: options.messageId, replyId: options.replyId } : null);
+    setDeepLinkCanvas(options?.canvasId || options?.taskId ? { canvasId: options.canvasId, taskId: options.taskId } : null);
+    const params = new URLSearchParams();
+    params.set('view', view);
+    if ((view === 'channel' || view === 'dms') && (channelId || currentChannelId)) {
+      params.set(view === 'dms' ? 'userId' : 'channelId', channelId || currentChannelId);
+    }
+    if (options?.messageId) params.set('messageId', options.messageId);
+    if (options?.replyId) params.set('replyId', options.replyId);
+    if (options?.canvasId) params.set('canvasId', options.canvasId);
+    if (options?.taskId) params.set('taskId', options.taskId);
+    const nextUrl = `${window.location.pathname}?${params.toString()}`;
+    window.history[options?.replace ? 'replaceState' : 'pushState']({}, '', nextUrl);
     setIsMobileMenuOpen(false);
   };
 
@@ -210,7 +236,7 @@ export default function App() {
       case 'follow-ups':
         return <FollowUppersView onNavigate={navigateToView} />;
       case 'canvas':
-        return <CanvasView />;
+        return <CanvasView deepLink={deepLinkCanvas} onNavigate={navigateToView} />;
       case 'files':
         return <FilesView />;
       case 'settings':
@@ -265,7 +291,7 @@ export default function App() {
       <IncomingCallNotification />
       {/* ActivityBar: Desktop only */}
       <div className="hidden md:flex shrink-0">
-        <ActivityBar currentView={currentView} onNavigate={setCurrentView} />
+        <ActivityBar currentView={currentView} onNavigate={navigateToView} />
       </div>
       
       <div className="flex-1 flex flex-col min-w-0">
