@@ -47,6 +47,7 @@ export default function App() {
     users,
     currentUser,
     activeOrganizationId,
+    accessibleOrganizations,
     dmUnreadByUserId
   } = useWorkspace();
 
@@ -103,6 +104,11 @@ export default function App() {
   }, [isResizing]);
 
   useEffect(() => {
+    // Workspace data arrives asynchronously after auth. Do not invalidate a
+    // URL-selected channel/DM while the access lists are still hydrating.
+    if (!isAuthInitialized || !isAuthenticated || !currentUser || channels.length === 0 || users.length === 0) return;
+    if (accessibleOrganizations.length === 0 && activeOrganizationId) return;
+
     const visibleChannels = channels.filter(channel => canAccessChannel(channel, currentUser, activeOrganizationId));
     const visibleDmUsers = users.filter(user =>
       (!activeOrganizationId || user.organizationIds?.includes(activeOrganizationId))
@@ -129,7 +135,7 @@ export default function App() {
 
     setCurrentView('home');
     setCurrentChannelId(visibleChannels[0]?.id || '');
-  }, [activeOrganizationId, channels, users, currentUser, currentView, currentChannelId]);
+  }, [activeOrganizationId, accessibleOrganizations, channels, users, currentUser, currentView, currentChannelId, isAuthenticated, isAuthInitialized]);
 
   useEffect(() => {
     const openDeepLink = () => {
@@ -148,6 +154,16 @@ export default function App() {
     window.addEventListener('popstate', openDeepLink);
     return () => window.removeEventListener('popstate', openDeepLink);
   }, []);
+
+  useEffect(() => {
+    if (currentView !== 'channel' || !deepLinkMessage || !currentChannelId) return;
+    const channelReady = channels.some(channel => channel.id === currentChannelId);
+    if (!channelReady) return;
+    const timer = window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('open-thread', { detail: deepLinkMessage }));
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [channels, currentChannelId, currentView, deepLinkMessage]);
 
   useEffect(() => {
     const callCode = new URLSearchParams(window.location.search).get('call');
