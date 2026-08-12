@@ -193,6 +193,7 @@ interface WorkspaceContextProps {
   presenceByUserId: Record<string, UserPresence>;
   isAuthenticated: boolean;
   isAuthInitialized: boolean;
+  isSupabaseHydrated: boolean;
   isPasswordRecovery: boolean;
   login: (email: string, password: string) => Promise<string | null>;
   loginWithGoogle: () => Promise<string | null>;
@@ -1670,7 +1671,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       dmUnreadByUserId, markDmRead,
       currentUser,
       presenceByUserId,
-      isAuthenticated, isAuthInitialized, isPasswordRecovery, login, loginWithGoogle, logout,
+      isAuthenticated, isAuthInitialized, isSupabaseHydrated, isPasswordRecovery, login, loginWithGoogle, logout,
       changeCurrentUserPassword,
       adminSetUserPassword,
       adminCreateUser,

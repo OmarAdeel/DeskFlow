@@ -42,6 +42,7 @@ export default function App() {
     setIsProfileModalOpen,
     isAuthenticated,
     isAuthInitialized,
+    isSupabaseHydrated,
     isPasswordRecovery,
     channels,
     users,
@@ -106,7 +107,7 @@ export default function App() {
   useEffect(() => {
     // Workspace data arrives asynchronously after auth. Do not invalidate a
     // URL-selected channel/DM while the access lists are still hydrating.
-    if (!isAuthInitialized || !isAuthenticated || !currentUser || channels.length === 0 || users.length === 0) return;
+    if (!isAuthInitialized || !isAuthenticated || !isSupabaseHydrated || !currentUser) return;
     if (accessibleOrganizations.length === 0 && activeOrganizationId) return;
 
     const visibleChannels = channels.filter(channel => canAccessChannel(channel, currentUser, activeOrganizationId));
@@ -135,7 +136,7 @@ export default function App() {
 
     setCurrentView('home');
     setCurrentChannelId(visibleChannels[0]?.id || '');
-  }, [activeOrganizationId, accessibleOrganizations, channels, users, currentUser, currentView, currentChannelId, isAuthenticated, isAuthInitialized]);
+  }, [activeOrganizationId, accessibleOrganizations, channels, users, currentUser, currentView, currentChannelId, isAuthenticated, isAuthInitialized, isSupabaseHydrated]);
 
   useEffect(() => {
     const openDeepLink = () => {
