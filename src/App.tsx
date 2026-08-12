@@ -48,7 +48,9 @@ export default function App() {
     users,
     currentUser,
     activeOrganizationId,
+    setActiveOrganizationId,
     accessibleOrganizations,
+    organizations,
     dmUnreadByUserId
   } = useWorkspace();
 
@@ -108,7 +110,19 @@ export default function App() {
     // Workspace data arrives asynchronously after auth. Do not invalidate a
     // URL-selected channel/DM while the access lists are still hydrating.
     if (!isAuthInitialized || !isAuthenticated || !isSupabaseHydrated || !currentUser) return;
-    if (accessibleOrganizations.length === 0 && activeOrganizationId) return;
+    // Organization selection is resolved immediately after Supabase hydration.
+    // Until then, an org-owned channel must not be treated as inaccessible.
+    if (organizations.length > 0 && activeOrganizationId === null) return;
+    if (accessibleOrganizations.length === 0 && organizations.length > 0) return;
+
+    const linkedChannel = currentView === 'channel' ? channels.find(channel => channel.id === currentChannelId) : undefined;
+    if (linkedChannel?.organizationId && linkedChannel.organizationId !== activeOrganizationId) {
+      const canUseOrganization = accessibleOrganizations.some(organization => organization.id === linkedChannel.organizationId);
+      if (canUseOrganization) {
+        setActiveOrganizationId(linkedChannel.organizationId);
+        return;
+      }
+    }
 
     const visibleChannels = channels.filter(channel => canAccessChannel(channel, currentUser, activeOrganizationId));
     const visibleDmUsers = users.filter(user =>
@@ -136,7 +150,7 @@ export default function App() {
 
     setCurrentView('home');
     setCurrentChannelId(visibleChannels[0]?.id || '');
-  }, [activeOrganizationId, accessibleOrganizations, channels, users, currentUser, currentView, currentChannelId, isAuthenticated, isAuthInitialized, isSupabaseHydrated]);
+  }, [activeOrganizationId, accessibleOrganizations, channels, users, currentUser, currentView, currentChannelId, isAuthenticated, isAuthInitialized, isSupabaseHydrated, organizations, setActiveOrganizationId]);
 
   useEffect(() => {
     const openDeepLink = () => {
