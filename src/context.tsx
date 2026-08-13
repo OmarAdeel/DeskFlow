@@ -456,6 +456,29 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
       micLevel: 0,
       position: { x: defaultX, y: defaultY }
     });
+
+    // Starting a direct huddle must notify the selected user. Without this,
+    // only the caller enters the room and WebRTC has no remote peer to join.
+    if (targetType === 'person' && targetId && targetId !== currentUser?.id && currentUser?.id) {
+      const inviteChannel = supabase.channel(`deskflow-call-invite-${targetId}`, {
+        config: { broadcast: { self: false } }
+      });
+      inviteChannel.subscribe(status => {
+        if (status !== 'SUBSCRIBED') return;
+        void inviteChannel.send({
+          type: 'broadcast',
+          event: 'invite',
+          payload: {
+            from: currentUser.id,
+            fromName: currentUser.name,
+            fromAvatarUrl: currentUser.avatarUrl,
+            roomCode: generatedCode,
+            video: videoEnabled
+          }
+        });
+        window.setTimeout(() => { void supabase.removeChannel(inviteChannel); }, 1500);
+      });
+    }
   };
 
   const endGlobalHuddle = () => {
