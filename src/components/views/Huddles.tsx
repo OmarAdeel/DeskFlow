@@ -214,7 +214,7 @@ export function HuddlesView() {
   const featuredParticipant = liveParticipantUsers.find(participant => !participant.isLocal) || liveParticipantUsers[0];
   const featuredUser = featuredParticipant ? users.find(user => user.id === featuredParticipant.id) || (featuredParticipant.id === currentUser?.id ? currentUser : undefined) : currentUser;
   const localDisplayName = currentUser?.name || 'You';
-  const featuredDisplayName = featuredParticipant?.name || localDisplayName;
+  const featuredDisplayName = featuredParticipant?.isLocal ? (isArabic ? 'أنت' : 'You') : (featuredParticipant?.name || localDisplayName);
   const inviteableUsers = users.filter(user => user.id !== currentUser?.id && !liveParticipantUsers.some(participant => participant.id === user.id) && user.name.toLowerCase().includes(inviteSearch.toLowerCase()));
   const [currentTimeStr, setCurrentTimeStr] = useState(() => {
     const now = new Date();
@@ -1185,7 +1185,7 @@ export function HuddlesView() {
 
               <div className="flex-1 overflow-y-auto mt-4 py-1 space-y-1.5 max-h-[290px] pr-1.5 custom-scrollbar">
                 {activeTab === 'people' ? (
-                  users.filter(user => user.name.toLowerCase().includes(searchQuery.toLowerCase())).map(user => {
+                  users.filter(user => user.id !== currentUser?.id && user.name.toLowerCase().includes(searchQuery.toLowerCase())).map(user => {
                     const isSelected = selectedId === user.id && selectedType === 'person';
                     return (
                       <button
@@ -1453,7 +1453,7 @@ export function HuddlesView() {
             {/* Bottom-Left Name Label inside Self View PiP Box */}
             <div className="absolute bottom-1.5 left-1.5 sm:bottom-2 sm:left-2 z-30">
               <span className="text-[9px] sm:text-[11px] text-white font-medium px-1.5 py-0.5 bg-black/50 backdrop-blur-md rounded-md truncate max-w-[80px] sm:max-w-none block">
-                {localDisplayName}
+                {isArabic ? 'أنت' : 'You'}
               </span>
             </div>
           </div>

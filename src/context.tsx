@@ -430,6 +430,9 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
   const recordingTimerRef = useRef<number | null>(null);
 
   const startGlobalHuddle = (targetId: string, targetType: 'person' | 'channel', roomCode?: string, videoEnabled = false) => {
+    // A normal direct call cannot target the caller. Shared-link joins may use
+    // the current user as a local fallback, so only apply this guard to new calls.
+    if (targetType === 'person' && targetId === currentUser?.id && !roomCode) return;
     if (targetType === 'person' && !users.some(user => user.id === targetId)) return;
     if (targetType === 'channel' && !channels.some(channel => channel.id === targetId)) return;
 
