@@ -914,6 +914,10 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
   const reconcileChannels = async (previous: Channel[], next: Channel[], userId: string) => {
     const nextIds = new Set(next.map(channel => channel.id));
     const removed = previous.filter(channel => !nextIds.has(channel.id));
+    // Channel metadata creation, updates, and deletion are restricted to
+    // organization admins by Supabase RLS. Regular members can still manage
+    // membership through the guarded server endpoint below.
+    const canManageChannelMetadata = currentUser?.role === 'Super Admin' || currentUser?.role === 'Admin';
     for (const channel of next) {
       const previousChannel = previous.find(item => item.id === channel.id);
       const organizationId = channel.organizationId || activeOrganizationId;
@@ -922,7 +926,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
         || previousChannel.name !== channel.name
         || previousChannel.isPrivate !== channel.isPrivate
         || previousChannel.organizationId !== channel.organizationId;
-      if (channelMetadataChanged) {
+      if (channelMetadataChanged && canManageChannelMetadata) {
         const { error } = await supabase.from('channels').upsert({
           id: channel.id, organization_id: organizationId, name: channel.name,
           is_private: channel.isPrivate, created_by: previousChannel ? undefined : userId
@@ -939,7 +943,7 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
         void persistChannelMembership(organizationId, channel.id, desiredMemberIds, desiredAgentIds);
       }
     }
-    if (removed.length) {
+    if (removed.length && canManageChannelMetadata) {
       const { error } = await supabase.from('channels').delete().in('id', removed.map(channel => channel.id));
       if (error) console.error('Unable to delete channels.', error);
     }
