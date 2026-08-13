@@ -310,6 +310,19 @@ export function HuddlesView() {
     }
   };
 
+  const startRecentHuddle = (name: string) => {
+    const target = users.find(user => user.name.toLowerCase() === name.toLowerCase());
+    if (!target || target.id === currentUser?.id) {
+      setSearchQuery(name);
+      setActiveTab('people');
+      setSelectedId(null);
+      setSelectedType(null);
+      setIsNewHuddleModalOpen(true);
+      return;
+    }
+    startGlobalHuddle(target.id, 'person');
+  };
+
   const triggerEmojiReaction = (emoji: string) => {
     const newId = `emoji-${Date.now()}-${Math.random()}`;
     const randomLeft = Math.floor(Math.random() * 60) + 20; // 20% to 80% width
@@ -713,9 +726,7 @@ export function HuddlesView() {
                 
                 {/* Card 1: Huddled with Esraa Soliman */}
                 <div 
-                  onClick={() => {
-                    startGlobalHuddle('2', 'person');
-                  }}
+                  onClick={() => startRecentHuddle('Esraa Soliman')}
                   className="border border-gray-800/80 bg-[#121317]/60 hover:bg-[#121317]/90 hover:border-blue-500/30 rounded-2xl p-6 flex flex-col items-center justify-center text-center relative overflow-hidden group transition-all duration-300 cursor-pointer min-h-[190px] shadow-lg"
                 >
                   <div className="flex justify-center -space-x-3.5 mb-4 rtl:space-x-reverse">
@@ -746,9 +757,7 @@ export function HuddlesView() {
 
                 {/* Card 2: Huddled with Omar Adel */}
                 <div 
-                  onClick={() => {
-                    startGlobalHuddle('5', 'person');
-                  }}
+                  onClick={() => startRecentHuddle('Omar Adel')}
                   className="border border-dashed border-gray-800/80 bg-[#121317]/30 hover:bg-[#121317] hover:border-blue-500/50 rounded-2xl p-6 flex flex-col items-center justify-center text-center relative overflow-hidden group transition-all duration-300 cursor-pointer min-h-[190px] shadow-lg"
                 >
                   <div className="flex justify-center -space-x-3.5 mb-4 rtl:space-x-reverse">

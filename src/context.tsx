@@ -430,6 +430,9 @@ export const WorkspaceProvider = ({ children }: { children: ReactNode }) => {
   const recordingTimerRef = useRef<number | null>(null);
 
   const startGlobalHuddle = (targetId: string, targetType: 'person' | 'channel', roomCode?: string, videoEnabled = false) => {
+    if (targetType === 'person' && !users.some(user => user.id === targetId)) return;
+    if (targetType === 'channel' && !channels.some(channel => channel.id === targetId)) return;
+
     const defaultX = typeof window !== 'undefined' ? Math.max(20, window.innerWidth - 360) : 100;
     const defaultY = typeof window !== 'undefined' ? Math.max(20, window.innerHeight - 200) : 100;
     const part = () => Math.random().toString(36).substring(2, 5);
