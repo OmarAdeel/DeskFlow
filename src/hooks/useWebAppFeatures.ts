@@ -14,6 +14,37 @@ declare global {
 const NOTIFICATIONS_ENABLED_KEY = 'deskflow_browser_notifications_enabled';
 const INSTALL_PROMPT_CAPTURED_EVENT = 'deskflow-install-prompt-captured';
 let deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
+let notificationAudioContext: AudioContext | null = null;
+
+const playNotificationSound = async () => {
+  try {
+    const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) return;
+
+    notificationAudioContext ||= new AudioContextClass();
+    if (notificationAudioContext.state === 'suspended') await notificationAudioContext.resume();
+
+    const context = notificationAudioContext;
+    const now = context.currentTime;
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.12, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
+    gain.connect(context.destination);
+
+    [880, 1175].forEach((frequency, index) => {
+      const oscillator = context.createOscillator();
+      oscillator.type = 'sine';
+      oscillator.frequency.value = frequency;
+      oscillator.connect(gain);
+      oscillator.start(now + index * 0.08);
+      oscillator.stop(now + 0.24);
+    });
+  } catch (error) {
+    // Browser autoplay policies may block notification audio; the notification remains usable.
+    console.debug('Notification sound unavailable:', error);
+  }
+};
 
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeinstallprompt', event => {
@@ -109,6 +140,7 @@ export function useWebAppFeatures() {
 
 export async function showDeskFlowNotification(title: string, options: NotificationOptions = {}) {
   if (!('Notification' in window) || Notification.permission !== 'granted' || localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) !== 'true') return;
+  void playNotificationSound();
   const registration = await navigator.serviceWorker?.getRegistration().catch(() => undefined);
   if (registration) {
     await registration.showNotification(title, { icon: '/deskflow-icon-192.png', badge: '/deskflow-icon-192.png', ...options });

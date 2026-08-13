@@ -2,7 +2,7 @@ import {
   AlignLeft, MessageSquare, Headphones, FileEdit, Book, Star, 
   Hash, Lock, ChevronDown, Plus, Settings, ChevronRight, Edit, Shield, LayoutGrid,
   Mail, Kanban, CheckSquare, MessageCircle, Folder, Home, Bell, Bookmark, BarChart3,
-  Workflow, Sparkles, Video, AppWindow, MoreHorizontal, Building2, Check
+  Workflow, Sparkles, Video, AppWindow, MoreHorizontal, Building2, Check, CalendarDays
 } from 'lucide-react';
 import { ViewType } from '../types';
 import { canAccessChannel, useWorkspace } from '../context';
@@ -155,6 +155,7 @@ export function Sidebar({ currentView, currentChannelId, width = 260, onViewChan
           <NavItem icon={Kanban} label={getTranslation(userLanguage, 'crm')} view="crm" active={currentView === 'crm'} />
           <NavItem icon={Bookmark} label={getTranslation(userLanguage, 'later')} view="later" active={currentView === 'later'} />
           <NavItem icon={Headphones} label={getTranslation(userLanguage, 'huddles')} view="huddles" active={currentView === 'huddles'} />
+          <NavItem icon={CalendarDays} label={getTranslation(userLanguage, 'meetings')} view="meetings" active={currentView === 'meetings'} />
           <NavItem icon={FileEdit} label={getTranslation(userLanguage, 'drafts')} view="drafts" active={currentView === 'drafts'} />
           <NavItem icon={Book} label={getTranslation(userLanguage, 'directories')} view="directories" active={currentView === 'directories'} />
           <NavItem icon={LayoutGrid} label={getTranslation(userLanguage, 'canvas')} view="canvas" active={currentView === 'canvas'} />

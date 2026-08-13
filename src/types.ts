@@ -52,6 +52,33 @@ export interface Channel {
   agentIds?: string[];
 }
 
+export interface CalendarEvent {
+  id: string;
+  ownerId: string;
+  organizationId: string | null;
+  title: string;
+  description?: string;
+  startAt: string;
+  endAt: string;
+  timezone: string;
+  location?: string;
+  meetingUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CalendarEventInput {
+  ownerId: string;
+  organizationId: string | null;
+  title: string;
+  description?: string;
+  startAt: string;
+  endAt: string;
+  timezone: string;
+  location?: string;
+  meetingUrl?: string;
+}
+
 export interface TaskItem {
   id: string;
   title: string;

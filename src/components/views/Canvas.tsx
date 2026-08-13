@@ -781,10 +781,15 @@ export function CanvasView({ deepLink, onNavigate }: {
                                 </span>
                               )}
                               {commentsCount > 0 && (
-                                <span className="flex items-center space-x-1 text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded border border-blue-500/20">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenDiscussion(card, item)}
+                                  title="Open comments"
+                                  className="flex items-center space-x-1 text-blue-400 bg-blue-500/10 hover:bg-blue-500/20 px-1.5 py-0.5 rounded border border-blue-500/20 transition cursor-pointer"
+                                >
                                   <MessageSquare className="h-2.5 w-2.5" />
                                   <span>{commentsCount} comments</span>
-                                </span>
+                                </button>
                               )}
                             </div>
                           </div>

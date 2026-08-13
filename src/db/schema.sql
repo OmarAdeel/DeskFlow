@@ -3,6 +3,8 @@
 -- PostgreSQL / Relational Schema Definition
 -- ==========================================
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- 1. USERS & RBAC GOVERNANCE
 CREATE TABLE IF NOT EXISTS users (
   id VARCHAR(64) PRIMARY KEY,
@@ -87,6 +89,25 @@ CREATE TABLE IF NOT EXISTS tasks (
   source_message_id VARCHAR(64) REFERENCES messages(id) ON DELETE SET NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS calendar_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  organization_id VARCHAR(255),
+  title VARCHAR(255) NOT NULL CHECK (length(trim(title)) > 0),
+  description TEXT,
+  start_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  end_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  timezone VARCHAR(128) NOT NULL DEFAULT 'UTC',
+  location TEXT,
+  meeting_url TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  CHECK (end_at > start_at)
+);
+
+CREATE INDEX IF NOT EXISTS calendar_events_owner_range_idx ON calendar_events(owner_id, start_at, end_at);
+CREATE INDEX IF NOT EXISTS calendar_events_organization_range_idx ON calendar_events(organization_id, start_at, end_at);
 
 -- 5. CONTACTS DIRECTORY & CRM DEALS
 CREATE TABLE IF NOT EXISTS contacts (

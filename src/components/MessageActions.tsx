@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, SmilePlus, MessageSquare, Forward, Bookmark, MoreVertical, Link as LinkIcon, X, Search, CheckCircle2, Pencil, Trash2 } from 'lucide-react';
+import { Check, SmilePlus, MessageSquare, Forward, Bookmark, MoreVertical, Link as LinkIcon, Copy, X, Search, CheckCircle2, Pencil, Trash2 } from 'lucide-react';
 import { useWorkspace } from '../context';
 import { EmojiDeluxe } from './EmojiDeluxe';
 import { UserAvatar } from './UserAvatar';
@@ -85,6 +85,22 @@ export function MessageActions({ itemId, onReply }: MessageActionsProps) {
     await deleteMessages(deletedIds);
     setSavedItems(previous => previous.filter(savedId => !deletedIds.includes(savedId)));
     setShowMoreMenu(false);
+  };
+
+  const copyMessage = () => {
+    const { text } = getChannelIdAndMessageText();
+
+    navigator.clipboard.writeText(text)
+      .then(() => {
+        setShowMoreMenu(false);
+        setShowToast('Message copied!');
+        setTimeout(() => setShowToast(''), 3000);
+      })
+      .catch((err) => {
+        console.error('Clipboard copy failed:', err);
+        setShowToast('Failed to copy message');
+        setTimeout(() => setShowToast(''), 2000);
+      });
   };
 
   const copyLink = () => {
@@ -251,6 +267,10 @@ export function MessageActions({ itemId, onReply }: MessageActionsProps) {
            <button onClick={() => setShowMoreMenu(previous => !previous)} title="More actions" aria-label="More actions" aria-expanded={showMoreMenu} className="p-1.5 hover:bg-gray-700 text-gray-400 hover:text-gray-200 transition-colors bg-[#1A1D21] rounded-r"><MoreVertical className="h-4 w-4" /></button>
            {showMoreMenu && (
              <div className="absolute right-0 top-full mt-1 w-44 bg-[#121317] border border-gray-700 rounded-lg shadow-2xl py-1 z-[1000]">
+               <button onClick={copyMessage} className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-gray-300 hover:text-white hover:bg-gray-800 transition-colors">
+                 <Copy className="h-3.5 w-3.5 text-blue-400" />
+                 <span>Copy message text</span>
+               </button>
                <button onClick={copyLink} className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-gray-300 hover:text-white hover:bg-gray-800 transition-colors">
                  <LinkIcon className="h-3.5 w-3.5 text-blue-400" />
                  <span>Copy link</span>

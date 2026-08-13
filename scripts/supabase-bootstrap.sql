@@ -146,6 +146,27 @@ create table if not exists public.tasks (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.calendar_events (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references public.profiles(id) on delete cascade,
+  organization_id text references public.organizations(id) on delete cascade,
+  title text not null check (length(trim(title)) > 0),
+  description text,
+  start_at timestamptz not null,
+  end_at timestamptz not null,
+  timezone text not null default 'UTC',
+  location text,
+  meeting_url text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (end_at > start_at)
+);
+
+create index if not exists calendar_events_owner_range_idx
+  on public.calendar_events(owner_id, start_at, end_at);
+create index if not exists calendar_events_organization_range_idx
+  on public.calendar_events(organization_id, start_at, end_at);
+
 create table if not exists public.contacts (
   id text primary key,
   organization_id text not null references public.organizations(id) on delete cascade,
@@ -399,6 +420,26 @@ as $$
   );
 $$;
 
+create or replace function public.preserve_calendar_event_identity()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  new.owner_id := old.owner_id;
+  new.organization_id := old.organization_id;
+  new.created_at := old.created_at;
+  new.updated_at := pg_catalog.now();
+  return new;
+end;
+$$;
+
+drop trigger if exists preserve_calendar_event_identity on public.calendar_events;
+create trigger preserve_calendar_event_identity
+before update on public.calendar_events
+for each row execute function public.preserve_calendar_event_identity();
+revoke all on function public.preserve_calendar_event_identity() from public, anon, authenticated;
+
 create or replace function public.preserve_message_identity()
 returns trigger
 language plpgsql
@@ -435,6 +476,7 @@ alter table public.message_reactions enable row level security;
 alter table public.message_reads enable row level security;
 alter table public.saved_items enable row level security;
 alter table public.tasks enable row level security;
+alter table public.calendar_events enable row level security;
 alter table public.contacts enable row level security;
 alter table public.deals enable row level security;
 alter table public.canvases enable row level security;
@@ -451,7 +493,7 @@ begin
     where schemaname = 'public' and tablename in (
       'profiles','organizations','organization_members','channels','channel_members','channel_agents','conversations',
       'conversation_members','messages','agent_messages','message_reactions','message_reads','saved_items','tasks','contacts',
-      'deals','canvases','file_assets','agents','system_audit_logs'
+      'deals','canvases','file_assets','agents','system_audit_logs','calendar_events'
     )
   loop
     execute format('drop policy if exists %I on %I.%I', policy_record.policyname, policy_record.schemaname, policy_record.tablename);
@@ -549,6 +591,22 @@ create policy tasks_member_select on public.tasks for select to authenticated us
 create policy tasks_member_insert on public.tasks for insert to authenticated with check (creator_id = auth.uid() and private.is_organization_member(organization_id));
 create policy tasks_participant_update on public.tasks for update to authenticated using (creator_id = auth.uid() or assignee_id = auth.uid() or private.is_organization_admin(organization_id));
 create policy tasks_admin_delete on public.tasks for delete to authenticated using (creator_id = auth.uid() or private.is_organization_admin(organization_id));
+
+create policy calendar_events_owner_select on public.calendar_events for select to authenticated
+using (owner_id = auth.uid());
+create policy calendar_events_owner_insert on public.calendar_events for insert to authenticated
+with check (
+  owner_id = auth.uid()
+  and (organization_id is null or private.is_organization_member(organization_id))
+);
+create policy calendar_events_owner_update on public.calendar_events for update to authenticated
+using (owner_id = auth.uid())
+with check (
+  owner_id = auth.uid()
+  and (organization_id is null or private.is_organization_member(organization_id))
+);
+create policy calendar_events_owner_delete on public.calendar_events for delete to authenticated
+using (owner_id = auth.uid());
 
 create policy contacts_member_all on public.contacts for all to authenticated using (private.is_organization_member(organization_id)) with check (private.is_organization_member(organization_id));
 create policy deals_member_all on public.deals for all to authenticated using (private.is_organization_member(organization_id)) with check (private.is_organization_member(organization_id));
