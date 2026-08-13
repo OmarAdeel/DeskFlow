@@ -1377,7 +1377,20 @@ export function HuddlesView() {
             const participant = users.find(user => user.id === participantId);
             return (
               <div key={participantId} className="absolute top-3 left-3 sm:top-4 sm:left-4 z-30 w-36 h-24 sm:w-52 sm:h-32 rounded-xl overflow-hidden border border-emerald-400/50 bg-black shadow-2xl">
-                <video ref={node => { if (node) node.srcObject = stream; }} autoPlay playsInline className="w-full h-full object-cover" />
+                <video
+                  ref={node => {
+                    if (!node) return;
+                    node.srcObject = stream;
+                    void node.play().catch(error => console.warn('Remote huddle audio playback was blocked.', error));
+                  }}
+                  onCanPlay={event => {
+                    void event.currentTarget.play().catch(error => console.warn('Remote huddle audio playback was blocked.', error));
+                  }}
+                  autoPlay
+                  playsInline
+                  muted={false}
+                  className="w-full h-full object-cover"
+                />
                 <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded bg-black/60 text-[10px] text-white">{participant?.name || 'Participant'}</span>
               </div>
             );
