@@ -820,10 +820,15 @@ export function DMsView({ userId }: { userId?: string }) {
   }, [conversations]);
 
   const ensureDmMembership = async (conversationId: string, userId: string) => {
-    return supabase.from('conversation_members').upsert(
-      { conversation_id: conversationId, user_id: userId },
-      { onConflict: 'conversation_id,user_id', ignoreDuplicates: true }
-    );
+    // Avoid upsert: it evaluates UPDATE RLS policies, but this table
+    // intentionally has no UPDATE policy. A duplicate membership is already
+    // in the desired state, so treat PostgreSQL's unique-violation response as
+    // success instead.
+    const { error } = await supabase.from('conversation_members').insert({
+      conversation_id: conversationId,
+      user_id: userId
+    });
+    return { error: error?.code === '23505' ? null : error };
   };
 
   const getDmConversation = async (targetUserId: string, create = false): Promise<string | null> => {
@@ -896,10 +901,10 @@ export function DMsView({ userId }: { userId?: string }) {
     // The creator can add both members. If the conversation already existed,
     // the other account may only add itself under RLS, so retry that narrower
     // insert instead of failing the entire DM send.
-    const { error: membersError } = await supabase.from('conversation_members').upsert([
+    const { error: membersError } = await supabase.from('conversation_members').insert([
       { conversation_id: conversationId, user_id: currentUser.id },
       { conversation_id: conversationId, user_id: targetUserId }
-    ], { onConflict: 'conversation_id,user_id', ignoreDuplicates: true });
+    ]);
     if (membersError) {
       const { error: selfMemberError } = await ensureDmMembership(conversationId, currentUser.id);
       if (selfMemberError) throw membersError;
