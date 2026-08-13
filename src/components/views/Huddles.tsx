@@ -211,7 +211,11 @@ export function HuddlesView() {
       return { id: participant.id, name: user?.name || 'Guest', avatarUrl: user?.avatarUrl, isLocal: false };
     })
   ].filter((user, index, list) => list.findIndex(item => item.id === user.id) === index);
-  const featuredParticipant = liveParticipantUsers.find(participant => !participant.isLocal) || liveParticipantUsers[0];
+  const targetUser = huddleTargetType === 'person' ? users.find(user => user.id === huddleTargetId) : undefined;
+  const remoteParticipant = liveParticipantUsers.find(participant => !participant.isLocal);
+  const featuredParticipant = remoteParticipant
+    || (targetUser ? { id: targetUser.id, name: targetUser.name, avatarUrl: targetUser.avatarUrl, isLocal: false } : undefined)
+    || liveParticipantUsers[0];
   const featuredUser = featuredParticipant ? users.find(user => user.id === featuredParticipant.id) || (featuredParticipant.id === currentUser?.id ? currentUser : undefined) : currentUser;
   const localDisplayName = currentUser?.name || 'You';
   const featuredDisplayName = featuredParticipant?.isLocal ? (isArabic ? 'أنت' : 'You') : (featuredParticipant?.name || localDisplayName);
