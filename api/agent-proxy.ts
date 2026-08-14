@@ -5,7 +5,7 @@ import { lookup } from 'node:dns/promises';
 const BLOCKED_HOSTNAMES = new Set(['localhost', 'localhost.localdomain']);
 
 const MAX_BODY_BYTES = 1_000_000;
-const PROVIDER_TIMEOUT_MS = 25_000;
+const PROVIDER_TIMEOUT_MS = 60_000;
 
 const sendJson = (response: Response, status: number, body: Record<string, unknown>) => {
   response.status(status).setHeader('Content-Type', 'application/json').send(JSON.stringify(body));
@@ -129,7 +129,7 @@ export default async function handler(request: Request, response: Response) {
     response.status(providerResponse.status).setHeader('Content-Type', providerResponse.headers.get('content-type') || 'application/json').send(body);
   } catch (error) {
     if (providerController.signal.aborted) {
-      return sendJson(response, 504, { error: { message: 'The AI provider did not respond within 25 seconds.' } });
+      return sendJson(response, 504, { error: { message: 'The AI provider did not respond within 60 seconds.' } });
     }
     return sendJson(response, 502, { error: { message: 'The server could not reach the configured AI provider.' } });
   } finally {
