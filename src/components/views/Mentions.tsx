@@ -29,6 +29,31 @@ interface MentionsViewProps {
   ) => void;
 }
 
+function formatActivityTime(timestamp: number, now = new Date()) {
+  const date = new Date(timestamp);
+  const calendarDay = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+  const currentCalendarDay = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const daysAgo = Math.max(0, Math.round((currentCalendarDay - calendarDay) / 86_400_000));
+  const time = date.toLocaleTimeString([], {
+    hour: 'numeric',
+    ...(date.getMinutes() === 0 ? {} : { minute: '2-digit' as const })
+  });
+
+  return {
+    relative: daysAgo === 0 ? `Today, ${time}` : daysAgo === 1 ? 'Yesterday' : `${daysAgo} days ago`,
+    exact: date.toLocaleString([], {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZoneName: 'short'
+    })
+  };
+}
+
 export function MentionsView({ onNavigate }: MentionsViewProps) {
   const { messages, setMessages, channels, users, currentUser, activeOrganizationId } = useWorkspace();
   const [filter, setFilter] = useState<ActivityFilter>('all');
@@ -187,6 +212,7 @@ export function MentionsView({ onNavigate }: MentionsViewProps) {
             const channel = channels.find(channelItem => channelItem.id === item.channelId);
             const sender = users.find(user => user.id === item.senderId);
             const isUnreadMention = item.kind === 'mention' && !item.isRead;
+            const activityTime = formatActivityTime(item.timestamp);
             return (
               <article key={item.id} className={`relative rounded-xl border bg-[#121317] p-4 transition hover:border-blue-500/40 ${isUnreadMention ? 'border-blue-500/40' : 'border-gray-800'}`}>
                 {isUnreadMention && <span className="absolute left-0 top-5 h-2 w-2 -translate-x-1/2 rounded-full bg-blue-400" aria-hidden="true" />}
@@ -199,7 +225,14 @@ export function MentionsView({ onNavigate }: MentionsViewProps) {
                         {item.kind === 'mention' ? <AtSign className="h-3 w-3" /> : <Smile className="h-3 w-3" />}
                         {item.kind === 'mention' ? 'Mentioned you' : 'Received a reaction'}
                       </span>
-                      <span className="ml-auto text-[10px] text-gray-600">{new Date(item.timestamp).toLocaleString()}</span>
+                      <time
+                        dateTime={new Date(item.timestamp).toISOString()}
+                        title={activityTime.exact}
+                        aria-label={activityTime.exact}
+                        className="ml-auto cursor-help text-[10px] text-gray-500 decoration-dotted hover:text-gray-300 hover:underline"
+                      >
+                        {activityTime.relative}
+                      </time>
                     </div>
                     {item.kind === 'reaction' && item.reactions?.length ? (
                       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
