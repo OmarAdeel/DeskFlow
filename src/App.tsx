@@ -15,6 +15,7 @@ import { DMsView } from './components/views/DMs';
 import { KPIsView } from './components/views/KPIs';
 import { MeetingsView } from './components/views/Meetings';
 import { PlaceholderView } from './components/views/Placeholder';
+import { MentionsView } from './components/views/Mentions';
 
 import { DraftsView } from './components/views/Drafts';
 import { DirectoriesView } from './components/views/Directories';
@@ -304,6 +305,7 @@ export default function App() {
       case 'channel':
         return <ChannelView channelId={currentChannelId} onNavigate={navigateToView} />;
       case 'activity':
+        return <MentionsView onNavigate={navigateToView} />;
       case 'more':
         return <PlaceholderView viewId={currentView} />;
       default:
@@ -394,8 +396,8 @@ export default function App() {
           <span className="text-[10px] mt-0.5">Huddles</span>
         </button>
         <button
-          onClick={() => navigateToView('unreads')}
-          className={`flex flex-col items-center justify-center flex-1 py-1 transition cursor-pointer ${currentView === 'unreads' ? 'text-blue-400 font-bold' : 'hover:text-gray-200'}`}
+          onClick={() => navigateToView('activity')}
+          className={`flex flex-col items-center justify-center flex-1 py-1 transition cursor-pointer ${currentView === 'activity' ? 'text-blue-400 font-bold' : 'hover:text-gray-200'}`}
         >
           <Bell className="h-5 w-5" />
           <span className="text-[10px] mt-0.5">Activity</span>

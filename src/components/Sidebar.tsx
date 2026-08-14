@@ -2,7 +2,7 @@ import {
   AlignLeft, MessageSquare, Headphones, FileEdit, Book, Star, 
   Hash, Lock, ChevronDown, Plus, Settings, ChevronRight, Edit, Shield, LayoutGrid,
   Mail, Kanban, CheckSquare, MessageCircle, Folder, Home, Bell, Bookmark, BarChart3,
-  Workflow, Sparkles, Video, AppWindow, MoreHorizontal, Building2, Check, CalendarDays
+  Workflow, Sparkles, Video, AppWindow, MoreHorizontal, Building2, Check, CalendarDays, AtSign
 } from 'lucide-react';
 import { ViewType } from '../types';
 import { canAccessChannel, useWorkspace } from '../context';
@@ -148,6 +148,7 @@ export function Sidebar({ currentView, currentChannelId, width = 260, onViewChan
         <div className="space-y-[2px]">
           <NavItem icon={Home} label={getTranslation(userLanguage, 'home')} view="home" active={currentView === 'home'} />
           <NavItem icon={AlignLeft} label={getTranslation(userLanguage, 'unreads')} view="unreads" active={currentView === 'unreads'} />
+          <NavItem icon={AtSign} label="Mentions & reactions" view="activity" active={currentView === 'activity'} iconClass="text-blue-400" />
           <NavItem icon={MessageSquare} label={getTranslation(userLanguage, 'threads')} view="threads" active={currentView === 'threads'} />
           <NavItem icon={MessageCircle} label={getTranslation(userLanguage, 'conversations')} view="conversations" active={currentView === 'conversations'} />
           <NavItem icon={CheckSquare} label={getTranslation(userLanguage, 'followups')} view="follow-ups" active={currentView === 'follow-ups'} />
