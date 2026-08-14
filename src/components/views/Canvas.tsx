@@ -1322,34 +1322,11 @@ export function CanvasView({ deepLink, onNavigate }: {
               </div>
 
               {/* Add Comment Input Form */}
-              <div className="p-4 border-t border-gray-800 bg-[#121317] space-y-3">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-[11px] text-gray-400 font-semibold">Posting as:</span>
-                  <span className="rounded-lg border border-gray-700 bg-[#1A1D21] px-2.5 py-1 text-xs font-semibold text-blue-300">{currentUser?.name || 'Workspace member'}</span>
-                </div>
-
-                {/* Team Mention bar for main comment */}
-                <div className="space-y-1">
-                  <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">Mention team members:</span>
-                  <div className="flex flex-wrap gap-1">
-                    {users.map(u => (
-                      <button
-                        key={u.id}
-                        type="button"
-                        onClick={() => handleInsertMention('main', u.name)}
-                        className="px-2 py-0.5 bg-gray-800 hover:bg-blue-600/30 text-blue-300 border border-gray-700 hover:border-blue-500/50 rounded-md text-[10px] font-semibold transition cursor-pointer flex items-center gap-0.5"
-                      >
-                        <span className="text-blue-400">@</span>
-                        <span>{u.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
+              <div className="p-4 border-t border-gray-800 bg-[#121317]">
                 <form onSubmit={handleAddComment} className="flex gap-2">
                   <textarea
                     rows={2}
-                    placeholder="Write a message or team note for this task... (@ to mention team members)"
+                    placeholder="Write a message or team note for this task..."
                     value={newCommentText}
                     onChange={(e) => setNewCommentText(e.target.value)}
                     className="flex-1 bg-[#1A1D21] border border-gray-700 rounded-xl p-2.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 resize-none"
