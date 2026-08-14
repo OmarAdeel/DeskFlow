@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Plus, Trash2, CheckCircle2, Circle, MessageSquare, LayoutGrid, Layers, Tag, 
   X, Send, User, FileText, Clock, Edit3, Save, Check, Paperclip, Sparkles, BookOpen,
-  CornerDownRight, Zap, Reply
+  CornerDownRight, Zap, Reply, MoreVertical, Copy, Link2, Pencil
 } from 'lucide-react';
 import { canAccessChannel, useWorkspace } from '../../context';
 import { supabase } from '../../lib/supabase';
@@ -197,6 +197,10 @@ export function CanvasView({ deepLink, onNavigate }: {
   const [isEditingDoc, setIsEditingDoc] = useState(false);
   const [replyingToCommentId, setReplyingToCommentId] = useState<string | null>(null);
   const [replyInputs, setReplyInputs] = useState<{ [commentId: string]: string }>({});
+  const [commentActionMenuId, setCommentActionMenuId] = useState<string | null>(null);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingCommentText, setEditingCommentText] = useState('');
+  const [commentToast, setCommentToast] = useState('');
 
   React.useEffect(() => {
     if (!deepLink || !cards.length || (activeTaskDiscussion && activeTaskDiscussion.card.id === deepLink.canvasId && activeTaskDiscussion.task.id === deepLink.taskId)) return;
@@ -406,6 +410,10 @@ export function CanvasView({ deepLink, onNavigate }: {
     setActiveTaskDiscussion({ card, task });
     setEditingDoc(task.documentation || '');
     setIsEditingDoc(false);
+    setCommentActionMenuId(null);
+    setEditingCommentId(null);
+    setEditingCommentText('');
+    setCommentToast('');
   };
 
   const handleAddComment = (e: React.FormEvent) => {
@@ -504,6 +512,120 @@ export function CanvasView({ deepLink, onNavigate }: {
     }
   };
 
+  const findCommentById = (commentId: string): CanvasTaskComment | undefined => {
+    const comments = activeTaskDiscussion?.task.discussions || [];
+    for (const comment of comments) {
+      if (comment.id === commentId) return comment;
+      const reply = comment.replies?.find(item => item.id === commentId);
+      if (reply) return reply;
+    }
+    return undefined;
+  };
+
+  const updateCommentById = (commentId: string, updater: (comment: CanvasTaskComment) => CanvasTaskComment) => {
+    if (!activeTaskDiscussion) return;
+    const updatedCards = cards.map(c => {
+      if (c.id !== activeTaskDiscussion.card.id) return c;
+      return {
+        ...c,
+        items: c.items.map(t => {
+          if (t.id !== activeTaskDiscussion.task.id) return t;
+          const discussions = (t.discussions || []).map(comment => {
+            if (comment.id === commentId) return updater(comment);
+            return {
+              ...comment,
+              replies: (comment.replies || []).map(reply => reply.id === commentId ? updater(reply) : reply)
+            };
+          });
+          return { ...t, discussions };
+        })
+      };
+    });
+    saveCards(updatedCards);
+  };
+
+  const deleteCommentById = (commentId: string) => {
+    if (!activeTaskDiscussion) return;
+    if (!window.confirm('Delete this comment permanently?')) return;
+    const updatedCards = cards.map(c => {
+      if (c.id !== activeTaskDiscussion.card.id) return c;
+      return {
+        ...c,
+        items: c.items.map(t => {
+          if (t.id !== activeTaskDiscussion.task.id) return t;
+          const topLevel = (t.discussions || []).filter(comment => comment.id !== commentId);
+          return {
+            ...t,
+            discussions: topLevel.map(comment => ({
+              ...comment,
+              replies: (comment.replies || []).filter(reply => reply.id !== commentId)
+            }))
+          };
+        })
+      };
+    });
+    saveCards(updatedCards);
+    setCommentActionMenuId(null);
+    if (editingCommentId === commentId) {
+      setEditingCommentId(null);
+      setEditingCommentText('');
+    }
+  };
+
+  const copyCommentText = (commentId: string) => {
+    const comment = findCommentById(commentId);
+    if (!comment) return;
+    navigator.clipboard.writeText(comment.text)
+      .then(() => {
+        setCommentActionMenuId(null);
+        setCommentToast('Comment copied!');
+        window.setTimeout(() => setCommentToast(''), 2500);
+      })
+      .catch(() => {
+        setCommentToast('Failed to copy comment');
+        window.setTimeout(() => setCommentToast(''), 2000);
+      });
+  };
+
+  const copyCommentLink = (commentId: string) => {
+    if (!activeTaskDiscussion) return;
+    const shareParams = new URLSearchParams({
+      view: 'canvas',
+      canvasId: activeTaskDiscussion.card.id,
+      taskId: activeTaskDiscussion.task.id,
+      commentId
+    });
+    const shareUrl = `${window.location.origin}${window.location.pathname}?${shareParams.toString()}`;
+    navigator.clipboard.writeText(shareUrl)
+      .then(() => {
+        setCommentActionMenuId(null);
+        setCommentToast('Link to this comment copied!');
+        window.setTimeout(() => setCommentToast(''), 2500);
+      })
+      .catch(() => {
+        setCommentToast('Failed to copy link');
+        window.setTimeout(() => setCommentToast(''), 2000);
+      });
+  };
+
+  const startEditingComment = (commentId: string) => {
+    const comment = findCommentById(commentId);
+    if (!comment) return;
+    setEditingCommentText(comment.text);
+    setEditingCommentId(commentId);
+    setCommentActionMenuId(null);
+  };
+
+  const saveEditingComment = (commentId: string) => {
+    const text = editingCommentText.trim();
+    if (!text) return;
+    updateCommentById(commentId, comment => ({ ...comment, text }));
+    setEditingCommentId(null);
+    setEditingCommentText('');
+    setCommentToast('Comment updated.');
+    window.setTimeout(() => setCommentToast(''), 2500);
+  };
+
   const handleAddReply = (parentCommentId: string, textToSubmit?: string) => {
     if (!activeTaskDiscussion || !currentUser) return;
     const content = (textToSubmit || replyInputs[parentCommentId])?.trim();
@@ -574,6 +696,70 @@ export function CanvasView({ deepLink, onNavigate }: {
 
     saveCards(updatedCards);
     setIsEditingDoc(false);
+  };
+
+  const renderCommentActionMenu = (commentId: string, isReply: boolean) => {
+    const comment = findCommentById(commentId);
+    if (!comment) return null;
+    const isAuthor = currentUser?.email?.toLowerCase() === comment.authorEmail.toLowerCase();
+    const isAdmin = currentUser?.role === 'Admin' || currentUser?.role === 'Super Admin';
+
+    return (
+      <div className="relative">
+        <button
+          type="button"
+          onClick={event => {
+            event.stopPropagation();
+            setCommentActionMenuId(commentActionMenuId === commentId ? null : commentId);
+          }}
+          className="p-1 hover:bg-gray-800 text-gray-400 hover:text-white rounded-md transition cursor-pointer"
+          title="Comment actions"
+          aria-label={`Actions for comment by ${comment.authorName}`}
+        >
+          <MoreVertical className="h-3.5 w-3.5" />
+        </button>
+        {commentActionMenuId === commentId && (
+          <div className="absolute right-0 top-full mt-1 w-48 bg-[#121317] border border-gray-700 rounded-lg shadow-2xl py-1 z-[1000]">
+            <button
+              type="button"
+              onClick={() => copyCommentText(commentId)}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-gray-300 hover:text-white hover:bg-gray-800 transition-colors cursor-pointer"
+            >
+              <Copy className="h-3.5 w-3.5 text-blue-400" />
+              <span>Copy comment text</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => copyCommentLink(commentId)}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-gray-300 hover:text-white hover:bg-gray-800 transition-colors cursor-pointer"
+            >
+              <Link2 className="h-3.5 w-3.5 text-blue-400" />
+              <span>Copy link</span>
+            </button>
+            {isAuthor && (
+              <button
+                type="button"
+                onClick={() => startEditingComment(commentId)}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-gray-300 hover:text-white hover:bg-gray-800 transition-colors cursor-pointer"
+              >
+                <Pencil className="h-3.5 w-3.5 text-amber-400" />
+                <span>Edit comment</span>
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => deleteCommentById(commentId)}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-rose-300 hover:text-rose-200 hover:bg-rose-950/40 transition-colors cursor-pointer"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>{isReply ? 'Delete reply' : 'Delete comment'}</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
 
   const colorOptions = [
@@ -852,6 +1038,11 @@ export function CanvasView({ deepLink, onNavigate }: {
       {/* TASK DISCUSSION & DOCUMENTATION DRAWER (SLIDE-OVER FROM RIGHT) */}
       {activeTaskDiscussion && (
         <div className="absolute inset-y-0 right-0 w-full max-w-md bg-[#16181D] border-l border-gray-800 shadow-2xl z-50 flex flex-col animate-in slide-in-from-right duration-200">
+          {commentToast && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1100] px-3 py-1.5 rounded-lg bg-[#121317] border border-blue-500/40 text-[11px] font-bold text-white shadow-2xl animate-fade-in">
+              {commentToast}
+            </div>
+          )}
           
           {/* DRAWER HEADER */}
           <div className="p-5 border-b border-gray-800 bg-[#121317] flex items-start justify-between">
@@ -930,15 +1121,47 @@ export function CanvasView({ deepLink, onNavigate }: {
                             <span className="text-[9px] text-gray-500 font-mono">{comment.authorEmail}</span>
                           </div>
                         </div>
-                        <span className="text-[10px] text-gray-500 flex items-center gap-1 font-mono">
-                          <Clock className="h-3 w-3" />
-                          {comment.createdAt}
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-[10px] text-gray-500 flex items-center gap-1 font-mono">
+                            <Clock className="h-3 w-3" />
+                            {comment.createdAt}
+                          </span>
+                          {renderCommentActionMenu(comment.id, false)}
                         </span>
                       </div>
 
-                      <div className="text-xs text-gray-300 leading-relaxed font-sans bg-[#14161B] p-2.5 rounded-xl border border-gray-800/80">
-                        {renderFormattedText(comment.text)}
-                      </div>
+                      {editingCommentId === comment.id ? (
+                        <div className="space-y-2">
+                          <textarea
+                            value={editingCommentText}
+                            onChange={event => setEditingCommentText(event.target.value)}
+                            rows={3}
+                            autoFocus
+                            className="w-full rounded-xl border border-blue-500/50 bg-[#121317] px-3 py-2 text-xs text-white outline-none focus:border-blue-500 resize-y"
+                          />
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => { setEditingCommentId(null); setEditingCommentText(''); }}
+                              className="px-2.5 py-1.5 text-[11px] text-gray-400 hover:text-white cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => saveEditingComment(comment.id)}
+                              disabled={!editingCommentText.trim()}
+                              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-[11px] font-bold text-white cursor-pointer"
+                            >
+                              Save changes
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-gray-300 leading-relaxed font-sans bg-[#14161B] p-2.5 rounded-xl border border-gray-800/80">
+                          {renderFormattedText(comment.text)}
+                        </div>
+                      )}
 
                       {/* Instant Reply action bar for main comment */}
                       <div className="flex items-center justify-between pt-1 border-t border-gray-800/60 text-[11px]">
@@ -966,12 +1189,44 @@ export function CanvasView({ deepLink, onNavigate }: {
                                   </div>
                                   <span className="font-bold text-white">{reply.authorName}</span>
                                 </div>
-                                <span className="text-gray-500 font-mono">{reply.createdAt}</span>
+                                <span className="flex items-center gap-1.5">
+                                  <span className="text-gray-500 font-mono">{reply.createdAt}</span>
+                                  {renderCommentActionMenu(reply.id, true)}
+                                </span>
                               </div>
 
-                              <div className="text-xs text-gray-300 font-sans pl-1">
-                                {renderFormattedText(reply.text)}
-                              </div>
+                              {editingCommentId === reply.id ? (
+                                <div className="space-y-2 pl-1">
+                                  <textarea
+                                    value={editingCommentText}
+                                    onChange={event => setEditingCommentText(event.target.value)}
+                                    rows={2}
+                                    autoFocus
+                                    className="w-full rounded-lg border border-blue-500/50 bg-[#121317] px-2.5 py-1.5 text-xs text-white outline-none focus:border-blue-500 resize-y"
+                                  />
+                                  <div className="flex justify-end gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => { setEditingCommentId(null); setEditingCommentText(''); }}
+                                      className="px-2 py-1 text-[10.5px] text-gray-400 hover:text-white cursor-pointer"
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => saveEditingComment(reply.id)}
+                                      disabled={!editingCommentText.trim()}
+                                      className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-[10.5px] font-bold text-white cursor-pointer"
+                                    >
+                                      Save changes
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="text-xs text-gray-300 font-sans pl-1">
+                                  {renderFormattedText(reply.text)}
+                                </div>
+                              )}
 
                               {/* Sub-reply action: Reply to this specific person (last person or person before him) */}
                               <div className="flex items-center justify-between pt-1 border-t border-gray-800/40 text-[10.5px]">

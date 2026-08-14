@@ -62,7 +62,8 @@ export default function App() {
       messageId: params.get('messageId'),
       replyId: params.get('replyId'),
       canvasId: params.get('canvasId'),
-      taskId: params.get('taskId')
+      taskId: params.get('taskId'),
+      commentId: params.get('commentId')
     };
   };
   const initialUrlState = readUrlState();
@@ -71,8 +72,8 @@ export default function App() {
   const [deepLinkMessage, setDeepLinkMessage] = useState<{ messageId: string; replyId?: string } | null>(
     initialUrlState.messageId ? { messageId: initialUrlState.messageId, replyId: initialUrlState.replyId || undefined } : null
   );
-  const [deepLinkCanvas, setDeepLinkCanvas] = useState<{ canvasId?: string; taskId?: string } | null>(
-    initialUrlState.canvasId || initialUrlState.taskId ? { canvasId: initialUrlState.canvasId || undefined, taskId: initialUrlState.taskId || undefined } : null
+  const [deepLinkCanvas, setDeepLinkCanvas] = useState<{ canvasId?: string; taskId?: string; commentId?: string } | null>(
+    initialUrlState.canvasId || initialUrlState.taskId ? { canvasId: initialUrlState.canvasId || undefined, taskId: initialUrlState.taskId || undefined, commentId: initialUrlState.commentId || undefined } : null
   );
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [isResizing, setIsResizing] = useState(false);
@@ -158,7 +159,7 @@ export default function App() {
       setCurrentView(next.view);
       if (next.selectionId) setCurrentChannelId(next.selectionId);
       setDeepLinkMessage(next.messageId ? { messageId: next.messageId, replyId: next.replyId || undefined } : null);
-      setDeepLinkCanvas(next.canvasId || next.taskId ? { canvasId: next.canvasId || undefined, taskId: next.taskId || undefined } : null);
+      setDeepLinkCanvas(next.canvasId || next.taskId ? { canvasId: next.canvasId || undefined, taskId: next.taskId || undefined, commentId: next.commentId || undefined } : null);
       if (next.messageId) {
         window.setTimeout(() => window.dispatchEvent(new CustomEvent('open-thread', {
           detail: { messageId: next.messageId, replyId: next.replyId }
@@ -228,7 +229,7 @@ export default function App() {
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  const navigateToView = (view: ViewType, channelId?: string, options?: { messageId?: string; replyId?: string; canvasId?: string; taskId?: string; replace?: boolean }) => {
+  const navigateToView = (view: ViewType, channelId?: string, options?: { messageId?: string; replyId?: string; canvasId?: string; taskId?: string; commentId?: string; replace?: boolean }) => {
     if (view === 'dms' && !channelId) {
       const fallbackDm = users.find(user =>
         user.id !== currentUser?.id && (!activeOrganizationId || user.organizationIds?.includes(activeOrganizationId))
@@ -239,7 +240,7 @@ export default function App() {
     }
     setCurrentView(view);
     setDeepLinkMessage(options?.messageId ? { messageId: options.messageId, replyId: options.replyId } : null);
-    setDeepLinkCanvas(options?.canvasId || options?.taskId ? { canvasId: options.canvasId, taskId: options.taskId } : null);
+    setDeepLinkCanvas(options?.canvasId || options?.taskId ? { canvasId: options.canvasId, taskId: options.taskId, commentId: options.commentId } : null);
     const params = new URLSearchParams();
     params.set('view', view);
     if ((view === 'channel' || view === 'dms') && (channelId || currentChannelId)) {
@@ -249,6 +250,7 @@ export default function App() {
     if (options?.replyId) params.set('replyId', options.replyId);
     if (options?.canvasId) params.set('canvasId', options.canvasId);
     if (options?.taskId) params.set('taskId', options.taskId);
+    if (options?.commentId) params.set('commentId', options.commentId);
     const nextUrl = `${window.location.pathname}?${params.toString()}`;
     window.history[options?.replace ? 'replaceState' : 'pushState']({}, '', nextUrl);
     setIsMobileMenuOpen(false);
